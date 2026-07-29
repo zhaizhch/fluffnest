@@ -5,7 +5,7 @@
 macOS 萌系桌面宠物：**多分类独立宠物**养成与图鉴收集、点击互动、温和提醒，以及「绒窝小铺」金币解锁。常驻透明窗，托盘可随时显示 / 隐藏。
 
 **仓库**：[github.com/zhaizhch/fluffnest](https://github.com/zhaizhch/fluffnest)  
-**版本**：`0.2.0`
+**版本**：`0.2.1`
 
 ---
 

@@ -1,6 +1,6 @@
 [package]
 name = "fluffnest"
-version = "0.2.0"
+version = "0.2.1"
 description = "绒窝 FluffNest — soft hand-drawn macOS desktop pets"
 authors = ["FluffNest"]
 edition = "2021"
