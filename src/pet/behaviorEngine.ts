@@ -12,6 +12,8 @@ export type BehaviorStep = {
   bubbleChance?: number;
   bubble?: string;
   move?: boolean;
+  /** tiny window nudge for soft idle walks */
+  moveTiny?: boolean;
   /** large teleport for warp */
   warp?: boolean;
 };
@@ -30,37 +32,70 @@ export function buildBlinkStep(): BehaviorStep {
 }
 
 /**
- * One gentle fidget about once a minute.
- * No bubbles, no window move, no flashy specials.
+ * Small lively fidget — restored soft "蹦蹦跳跳", low frequency, short.
+ * No bubbles, no warp/ultimate; walks only nudge the window a little.
  */
-export function buildMinuteFidget(speciesId: string): BehaviorStep {
+export function buildSoftIdleAction(speciesId: string): BehaviorStep[] {
   const personality = petDef(speciesId)?.personality ?? "calm";
-  const pool: PetBehavior[] =
-    personality === "lively"
-      ? ["stretch", "nod", "wave", "yawn", "look"]
-      : personality === "clingy"
-        ? ["look", "nod", "yawn", "wave", "sit"]
-        : ["yawn", "sit", "nod", "stretch", "look"];
+
+  const tiny: PetBehavior[] = ["nod", "look", "yawn", "stretch", "wave", "sit"];
+  const bounce: PetBehavior[] = [
+    "stretch",
+    "wave",
+    "cheer",
+    "spin",
+    "jump_rope",
+    "walk",
+    "dance",
+  ];
+
+  let pool: PetBehavior[];
+  if (personality === "lively") {
+    pool = [...bounce, ...bounce, ...tiny];
+  } else if (personality === "clingy") {
+    pool = [...tiny, "look", "wave", "nuzzle", "nod", "walk"];
+  } else {
+    pool = [...tiny, "sit", "yawn", "stretch", "nod", "walk"];
+  }
 
   const b = pick(pool);
-  return {
-    behavior: b,
-    durationMs: 1600 + Math.floor(Math.random() * 1200),
-    bubbleChance: 0,
-    move: false,
-  };
+  const short = 1100 + Math.floor(Math.random() * 900);
+  const steps: BehaviorStep[] = [
+    {
+      behavior: b,
+      durationMs: short,
+      bubbleChance: 0.08,
+      move: b === "walk",
+      moveTiny: b === "walk",
+    },
+  ];
+
+  // Occasional tiny two-step: action → brief idle settle
+  if (Math.random() < 0.35) {
+    steps.push({
+      behavior: pick(["idle", "nod", "look"] as PetBehavior[]),
+      durationMs: 600 + Math.floor(Math.random() * 500),
+      bubbleChance: 0,
+    });
+  }
+
+  return steps;
+}
+
+/** @deprecated alias */
+export function buildMinuteFidget(speciesId: string): BehaviorStep {
+  return buildSoftIdleAction(speciesId)[0]!;
 }
 
 /**
- * @deprecated Quiet mode no longer uses multi-step idle bursts.
- * Kept for import compatibility — returns a single minute fidget.
+ * Soft idle routine for autonomous life.
  */
 export function buildIdleRoutine(
   speciesId: string,
   _owned: Set<string>,
   _personality: string,
 ): BehaviorStep[] {
-  return [buildMinuteFidget(speciesId)];
+  return buildSoftIdleAction(speciesId);
 }
 
 /** Each click rolls a different multi-step reaction + dialogue. */

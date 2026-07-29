@@ -193,7 +193,7 @@ html.pet-window #root {
 
 .soft-pet.behavior-walk,
 .pixi-pet.behavior-walk {
-  animation: soft-bob 0.45s ease-in-out infinite;
+  animation: soft-bob 0.55s ease-in-out infinite;
 }
 
 .soft-pet.behavior-sleep,
@@ -206,8 +206,13 @@ html.pet-window #root {
 .soft-pet.behavior-cheer,
 .soft-pet.behavior-play,
 .soft-pet.behavior-dance,
-.soft-pet.behavior-jump_rope {
-  animation: soft-hop 0.55s ease-in-out infinite;
+.soft-pet.behavior-jump_rope,
+.soft-pet.behavior-spin,
+.pixi-pet.behavior-cheer,
+.pixi-pet.behavior-dance,
+.pixi-pet.behavior-jump_rope,
+.pixi-pet.behavior-spin {
+  animation: soft-hop 0.65s ease-in-out infinite;
 }
 
 .soft-pet.behavior-react,
@@ -223,7 +228,7 @@ html.pet-window #root {
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-4px);
+    transform: translateY(-2px);
   }
 }
 
@@ -233,7 +238,7 @@ html.pet-window #root {
     transform: scale(1);
   }
   50% {
-    transform: scale(1.03);
+    transform: scale(1.02);
   }
 }
 
@@ -243,7 +248,7 @@ html.pet-window #root {
     transform: translateY(0);
   }
   40% {
-    transform: translateY(-10px);
+    transform: translateY(-5px);
   }
 }
 

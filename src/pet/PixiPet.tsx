@@ -8,6 +8,7 @@ import {
   type AtlasAnim,
 } from "../lib/codexAtlas";
 import { spriteFor } from "../lib/petCatalog";
+import { nextBlinkDelayMs } from "./quietSchedule";
 
 type Props = {
   species: string;
@@ -75,15 +76,7 @@ function paint(
   );
 }
 
-/**
- * Quiet idle must NOT loop the atlas idle row — those sheets usually embed
- * blinks every ~0.7s. Hold frame 0 with eyes open; only animate on actions.
- */
-function shouldHold(behavior: string): boolean {
-  return behavior === "idle";
-}
-
-/** Canvas 2D Codex-atlas pet (no skin / growth). */
+/** Canvas 2D Codex-atlas pet. */
 export function PixiPet({
   species,
   behavior,
@@ -95,17 +88,15 @@ export function PixiPet({
   const frameRef = useRef(0);
   const animRef = useRef<AtlasAnim>("idle");
   const versionRef = useRef(1);
-  const holdRef = useRef(true);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
   const face = spriteFor(species);
   const anim = behaviorToAnim(behavior, facing);
-  const hold = shouldHold(behavior);
+  const isIdle = behavior === "idle";
   const drawW = Math.max(48, size);
   const drawH = Math.round(drawW * (FRAME_H / FRAME_W));
 
   animRef.current = anim;
-  holdRef.current = hold;
 
   useEffect(() => {
     let alive = true;
@@ -133,46 +124,89 @@ export function PixiPet({
     };
   }, [face.src, face.spriteVersionNumber, drawW, drawH]);
 
+  /**
+   * Idle: hold eyes-open (frame 0) ~1.4–2.1s, then play one idle atlas cycle
+   * (Codex sheets bake blink into the idle row), then hold again.
+   * Soft hops / walks are driven by PetApp, not this loop.
+   * Other behaviors: normal loop.
+   */
   useEffect(() => {
     if (status !== "ready") return;
+    const img = imgRef.current;
+    const canvas = canvasRef.current;
+    if (!img || !canvas) return;
 
-    // Quiet idle: paint once and stop the interval so atlas blinks don't loop.
-    if (hold) {
-      const img = imgRef.current;
-      if (img) {
-        frameRef.current = 0;
-        paint(canvasRef.current, img, versionRef.current, anim, 0, drawW, drawH);
-      }
-      return;
+    if (!isIdle) {
+      frameRef.current = 0;
+      paint(canvas, img, versionRef.current, anim, 0, drawW, drawH);
+      const id = window.setInterval(() => {
+        const sheet = imgRef.current;
+        const c = canvasRef.current;
+        if (!sheet || !c) return;
+        const { frames } = resolveAnim(animRef.current, versionRef.current);
+        frameRef.current = (frameRef.current + 1) % frames;
+        paint(
+          c,
+          sheet,
+          versionRef.current,
+          animRef.current,
+          frameRef.current,
+          drawW,
+          drawH,
+        );
+      }, 120);
+      return () => window.clearInterval(id);
     }
 
-    const tickMs = behavior === "look" ? 160 : 120;
+    // Quiet idle with natural blinks from idle row
+    let phase: "hold" | "blink" = "hold";
+    let holdUntil = Date.now() + nextBlinkDelayMs();
+    frameRef.current = 0;
+    paint(canvas, img, versionRef.current, "idle", 0, drawW, drawH);
+
+    const BLINK_FRAME_MS = 90;
     const id = window.setInterval(() => {
-      const img = imgRef.current;
-      const canvas = canvasRef.current;
-      if (!img || !canvas || holdRef.current) return;
-      const { frames } = resolveAnim(animRef.current, versionRef.current);
-      frameRef.current = (frameRef.current + 1) % frames;
+      const sheet = imgRef.current;
+      const c = canvasRef.current;
+      if (!sheet || !c) return;
+      const { frames } = resolveAnim("idle", versionRef.current);
+      const now = Date.now();
+
+      if (phase === "hold") {
+        if (now < holdUntil) {
+          // stay on open-eye frame
+          if (frameRef.current !== 0) {
+            frameRef.current = 0;
+            paint(c, sheet, versionRef.current, "idle", 0, drawW, drawH);
+          }
+          return;
+        }
+        phase = "blink";
+        frameRef.current = 0;
+      }
+
+      // blink / micro-idle: advance through idle row once
+      frameRef.current += 1;
+      if (frameRef.current >= frames) {
+        phase = "hold";
+        frameRef.current = 0;
+        holdUntil = now + nextBlinkDelayMs();
+        paint(c, sheet, versionRef.current, "idle", 0, drawW, drawH);
+        return;
+      }
       paint(
-        canvas,
-        img,
+        c,
+        sheet,
         versionRef.current,
-        animRef.current,
+        "idle",
         frameRef.current,
         drawW,
         drawH,
       );
-    }, tickMs);
-    return () => window.clearInterval(id);
-  }, [status, drawW, drawH, anim, hold, behavior]);
+    }, BLINK_FRAME_MS);
 
-  useEffect(() => {
-    frameRef.current = 0;
-    const img = imgRef.current;
-    if (img && status === "ready") {
-      paint(canvasRef.current, img, versionRef.current, anim, 0, drawW, drawH);
-    }
-  }, [anim, drawW, drawH, status, hold]);
+    return () => window.clearInterval(id);
+  }, [status, drawW, drawH, anim, isIdle, behavior]);
 
   const mirror = facing === "left" && anim !== "runningLeft";
 
@@ -182,7 +216,7 @@ export function PixiPet({
       title={face.label}
       data-species={species}
       data-status={status}
-      data-hold={hold ? "1" : "0"}
+      data-idle={isIdle ? "1" : "0"}
       style={{
         width: drawW,
         height: drawH,

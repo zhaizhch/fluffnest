@@ -12,19 +12,13 @@ import {
 } from "../lib/types";
 import { getCatalogAction, resolveVisualBehavior } from "../lib/actions";
 import {
-  buildBlinkStep,
   buildClickReaction,
-  buildMinuteFidget,
+  buildSoftIdleAction,
   pickClingyLine,
   stepDuration,
   type BehaviorStep,
 } from "./behaviorEngine";
-import {
-  msUntilNext,
-  nextBlinkDelayMs,
-  nextFidgetDelayMs,
-  pickQuietEvent,
-} from "./quietSchedule";
+import { nextSoftActionDelayMs } from "./quietSchedule";
 import { PetFigure } from "./PetFigure";
 import "./pet.css";
 
@@ -73,7 +67,7 @@ export function PetApp() {
     bubbleTimer.current = window.setTimeout(() => setBubble(null), ms);
   }, []);
 
-  const maybeMove = useCallback(async () => {
+  const maybeMove = useCallback(async (tiny = false) => {
     try {
       const win = getCurrentWindow();
       const pos = await win.outerPosition();
@@ -82,14 +76,17 @@ export function PetApp() {
       const logicalY = pos.y / scale;
       if (Math.random() < 0.4) walkDir.current *= -1;
       setFacing(walkDir.current > 0 ? "right" : "left");
+      const stepX = tiny
+        ? 6 + Math.random() * 12
+        : 24 + Math.random() * 56;
+      const stepY = tiny
+        ? (Math.random() - 0.5) * 10
+        : (Math.random() - 0.5) * 28;
       const nx = Math.max(
         24,
-        Math.min(1180, logicalX + walkDir.current * (24 + Math.random() * 56)),
+        Math.min(1180, logicalX + walkDir.current * stepX),
       );
-      const ny = Math.max(
-        48,
-        Math.min(720, logicalY + (Math.random() - 0.5) * 28),
-      );
+      const ny = Math.max(48, Math.min(720, logicalY + stepY));
       await win.setPosition(new LogicalPosition(nx, ny));
     } catch {
       /* ignore */
@@ -166,7 +163,7 @@ export function PetApp() {
           await sleep(Math.max(0, ms - Math.min(420, ms * 0.35)));
         } else {
           if (step.move || step.behavior === "walk") {
-            void maybeMove();
+            void maybeMove(Boolean(step.moveTiny));
           }
           await sleep(ms);
         }
@@ -219,7 +216,7 @@ export function PetApp() {
     };
   }, [runSequence]);
 
-  // Quiet life: freeze idle → rare blink (35–55s) → fidget ~every minute
+  // Quiet life: PixiPet blinks ~1.5–2s; soft little hops every ~14–22s
   useEffect(() => {
     let cancelled = false;
 
@@ -235,8 +232,7 @@ export function PetApp() {
     };
 
     const loop = async () => {
-      let nextBlinkAt = Date.now() + nextBlinkDelayMs();
-      let nextFidgetAt = Date.now() + nextFidgetDelayMs();
+      let nextSoftAt = Date.now() + nextSoftActionDelayMs();
 
       while (!cancelled) {
         await waitWhileBusy();
@@ -258,49 +254,39 @@ export function PetApp() {
             continue;
           }
           setPet(active);
-          setBehavior("idle");
-          setBubble(null);
+          if (!userSeqActive.current) {
+            setBehavior("idle");
+            setBubble(null);
+          }
 
-          const now = Date.now();
-          const waitMs = msUntilNext(now, nextBlinkAt, nextFidgetAt);
-          const wakeAt = now + waitMs;
+          const waitMs = Math.max(0, nextSoftAt - Date.now());
+          const wakeAt = Date.now() + waitMs;
           while (!cancelled && Date.now() < wakeAt) {
             if (userSeqActive.current || dragRef.current) break;
-            await sleep(400);
+            await sleep(500);
           }
           if (cancelled) return;
           await waitWhileBusy();
           if (userSeqActive.current) {
-            // After user interact, push timers forward so we don't immediately fidget
-            nextBlinkAt = Date.now() + nextBlinkDelayMs();
-            nextFidgetAt = Date.now() + nextFidgetDelayMs();
+            nextSoftAt = Date.now() + nextSoftActionDelayMs();
             continue;
           }
 
-          const event = pickQuietEvent(Date.now(), nextBlinkAt, nextFidgetAt);
-          if (event === "fidget") {
-            await runSequence(
-              [buildMinuteFidget(active.speciesId)],
-              active.speciesId,
-            );
-            nextFidgetAt = Date.now() + nextFidgetDelayMs();
-            // Keep blink cadence independent
-            if (nextBlinkAt <= Date.now()) {
-              nextBlinkAt = Date.now() + nextBlinkDelayMs();
+          await runSequence(
+            buildSoftIdleAction(active.speciesId),
+            active.speciesId,
+          );
+          nextSoftAt = Date.now() + nextSoftActionDelayMs();
+
+          if (Math.random() < 0.35) {
+            try {
+              await api.tickIdle();
+            } catch {
+              /* ignore */
             }
-            if (Math.random() < 0.35) {
-              try {
-                await api.tickIdle();
-              } catch {
-                /* ignore */
-              }
-            }
-          } else {
-            await runSequence([buildBlinkStep()], active.speciesId);
-            nextBlinkAt = Date.now() + nextBlinkDelayMs();
           }
 
-          setBehavior("idle");
+          if (!userSeqActive.current) setBehavior("idle");
         } catch {
           await sleep(5000);
         }
