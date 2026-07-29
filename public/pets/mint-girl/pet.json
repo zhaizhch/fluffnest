@@ -1,0 +1,151 @@
+{
+    "id":  "mint-girl",
+    "displayName":  "Mint Silk Girl",
+    "description":  "An adult anime fashion pet in an elegant mint-green long dress, with shoulder-length black hair, warm highlights, and a poised confident presence.",
+    "spriteVersionNumber":  2,
+    "spritesheetPath":  "spritesheet.webp",
+    "idleBehavior":  {
+                         "mode":  "random",
+                         "animations":  [
+                                            "idle",
+                                            "backTurn",
+                                            "armsUp",
+                                            "handsBehind",
+                                            "sway"
+                                        ]
+                     },
+    "animations":  {
+                       "backTurn":  {
+                                        "sourceRow":  "running-right",
+                                        "frameCount":  8,
+                                        "timingMs":  [
+                                                         160,
+                                                         160,
+                                                         180,
+                                                         200,
+                                                         220,
+                                                         220,
+                                                         180,
+                                                         160
+                                                     ],
+                                        "durationMs":  1480,
+                                        "playback":  "once",
+                                        "loop":  false,
+                                        "description":  "Turns from front to a back-facing three-quarter pose with an upper-back cut-out.",
+                                        "displayName":  ""
+                                    },
+                       "armsUp":  {
+                                      "sourceRow":  "jumping",
+                                      "frameCount":  5,
+                                      "timingMs":  [
+                                                       170,
+                                                       190,
+                                                       220,
+                                                       190,
+                                                       170
+                                                   ],
+                                      "durationMs":  940,
+                                      "playback":  "once",
+                                      "loop":  false,
+                                      "description":  "Raises both arms overhead and lowers them smoothly.",
+                                      "displayName":  ""
+                                  },
+                       "handsBehind":  {
+                                           "sourceRow":  "waiting",
+                                           "frameCount":  6,
+                                           "timingMs":  [
+                                                            160,
+                                                            180,
+                                                            220,
+                                                            240,
+                                                            200,
+                                                            160
+                                                        ],
+                                           "durationMs":  1160,
+                                           "playback":  "once",
+                                           "loop":  false,
+                                           "description":  "Moves both hands behind the back, pauses, then releases.",
+                                           "displayName":  ""
+                                       },
+                       "lyingFront":  {
+                                          "sourceRow":  "review",
+                                          "frameCount":  6,
+                                          "timingMs":  [
+                                                           180,
+                                                           200,
+                                                           240,
+                                                           260,
+                                                           220,
+                                                           180
+                                                       ],
+                                          "durationMs":  1280,
+                                          "playback":  "once",
+                                          "loop":  false,
+                                          "description":  "Lies on the stomach facing forward with a gentle head and blink loop.",
+                                          "displayName":  ""
+                                      },
+                       "idle":  {
+                                    "sourceRow":  "idle",
+                                    "frameCount":  6,
+                                    "timingMs":  [
+                                                     220,
+                                                     240,
+                                                     280,
+                                                     320,
+                                                     280,
+                                                     240
+                                                 ],
+                                    "durationMs":  1580,
+                                    "playback":  "loop",
+                                    "loop":  true,
+                                    "description":  "Idle stretch: the character rolls her shoulders, reaches overhead, holds briefly, then relaxes."
+                                },
+                       "sway":  {
+                                    "sourceRow":  "running",
+                                    "frameCount":  6,
+                                    "timingMs":  [
+                                                     180,
+                                                     210,
+                                                     250,
+                                                     290,
+                                                     250,
+                                                     210
+                                                 ],
+                                    "durationMs":  1390,
+                                    "playback":  "loop",
+                                    "loop":  true,
+                                    "description":  "A confident, sensual side-to-side hip sway with a shoulder tilt, hair movement, and steady eye contact; the outfit remains fully covered.",
+                                    "displayName":  ""
+                                }
+                   },
+    "actions":  {
+                    "backTurn":  "backTurn",
+                    "turnBack":  "backTurn",
+                    "armsUp":  "armsUp",
+                    "handsBehind":  "handsBehind",
+                    "lyingFront":  "lyingFront",
+                    "sway":  "sway"
+                },
+    "interactions":  {
+                         "click":  {
+                                       "animations":  [
+                                                          "sway",
+                                                          "backTurn",
+                                                          "armsUp",
+                                                          "handsBehind",
+                                                          "lyingFront"
+                                                      ],
+                                       "mode":  "cycle",
+                                       "showName":  false,
+                                       "showEffectName":  false
+                                   },
+                         "hover":  {
+                                       "animation":  "lyingFront",
+                                       "mode":  "single",
+                                       "playback":  "once",
+                                       "trigger":  "hover",
+                                       "event":  "pointerenter",
+                                       "click":  false
+                                   }
+                     }
+}

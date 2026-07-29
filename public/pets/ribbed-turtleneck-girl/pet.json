@@ -1,0 +1,107 @@
+{
+  "id": "ribbed-turtleneck-girl",
+  "displayName": "Ribbed Turtleneck Girl",
+  "description": "An adult anime fashion pet in a gray ribbed sleeveless turtleneck mini dress, with glasses, a long chestnut ponytail, bare legs and bare feet.",
+  "spriteVersionNumber": 2,
+  "spritesheetPath": "spritesheet.webp",
+  "idleBehavior": {
+    "mode": "random",
+    "animations": [
+      "idle",
+      "backTurn",
+      "armsUp",
+      "handsBehind"
+    ]
+  },
+  "animations": {
+    "backTurn": {
+      "sourceRow": "running-right",
+      "frameCount": 8,
+      "timingMs": [
+        160,
+        160,
+        180,
+        200,
+        220,
+        220,
+        180,
+        160
+      ],
+      "durationMs": 1480,
+      "playback": "once",
+      "loop": false
+    },
+    "armsUp": {
+      "sourceRow": "jumping",
+      "frameCount": 8,
+      "timingMs": [
+        150,
+        150,
+        170,
+        190,
+        220,
+        220,
+        180,
+        150
+      ],
+      "durationMs": 1430,
+      "playback": "once",
+      "loop": false,
+      "description": "Raises both arms overhead and lowers them smoothly.",
+      "displayName": "Giơ hai tay"
+    },
+    "handsBehind": {
+      "sourceRow": "waiting",
+      "frameCount": 8,
+      "timingMs": [
+        160,
+        160,
+        180,
+        200,
+        240,
+        220,
+        180,
+        160
+      ],
+      "durationMs": 1500,
+      "playback": "once",
+      "loop": false,
+      "description": "Moves both hands behind the back, pauses, then releases.",
+      "displayName": "Hai tay sau lưng"
+    },
+    "idle": {
+      "sourceRow": "idle",
+      "frameCount": 8,
+      "timingMs": [
+        220,
+        220,
+        240,
+        260,
+        320,
+        260,
+        240,
+        220
+      ],
+      "durationMs": 1980,
+      "playback": "loop",
+      "loop": true,
+      "description": "Idle stretch: the character rolls her shoulders, reaches overhead, holds briefly, then relaxes."
+    }
+  },
+  "actions": {
+    "backTurn": "backTurn",
+    "turnBack": "backTurn",
+    "armsUp": "armsUp",
+    "handsBehind": "handsBehind"
+  },
+  "interactions": {
+    "hover": {
+      "animation": "backTurn",
+      "mode": "single",
+      "playback": "once",
+      "trigger": "hover",
+      "event": "pointerenter",
+      "click": false
+    }
+  }
+}

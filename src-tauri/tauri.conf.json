@@ -1,0 +1,78 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FluffNest",
+  "version": "0.2.0",
+  "identifier": "com.fluffnest.deskpet",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "pet",
+        "title": "绒窝",
+        "url": "index.html?window=pet",
+        "width": 260,
+        "height": 320,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": true,
+        "center": false,
+        "x": 120,
+        "y": 120
+      },
+      {
+        "label": "panel",
+        "title": "绒窝面板",
+        "url": "index.html?window=panel",
+        "width": 440,
+        "height": 640,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "visible": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "category": "Lifestyle",
+    "shortDescription": "软萌手绘桌面宠物",
+    "longDescription": "绒窝 FluffNest：多宠物养成、皮肤收集、喝水/久坐/会议提醒，常驻 macOS 桌面自主玩耍。",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "dmg": {
+        "appPosition": {
+          "x": 180,
+          "y": 220
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 220
+        }
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

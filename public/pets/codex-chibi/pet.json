@@ -1,0 +1,18 @@
+{
+  "id": "codex-chibi",
+  "displayName": "小助理 Luna",
+  "description": "一个会害羞、会挣扎、会扫地，还会拿放大镜到处观察的 3D Q版桌面小助理。",
+  "spritesheetPath": "spritesheet.webp",
+  "kind": "person",
+  "type": "Pet",
+  "rarity": "Community",
+  "tags": [
+    "Codex Pet",
+    "Spritesheet",
+    "Pet",
+    "Cute",
+    "AI",
+    "Person",
+    "Anime"
+  ]
+}

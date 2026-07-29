@@ -1,0 +1,136 @@
+name: Release
+
+# Push a version tag to build macOS installers and publish a GitHub Release.
+# Example: git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0). Leave empty to use package.json version."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS (${{ matrix.arch }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build & package
+        run: bash scripts/package-release.sh ${{ matrix.arch }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluffnest-${{ matrix.arch }}
+          path: release/v*/**
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build-macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.tag }}" ]]; then
+            TAG="${{ inputs.tag }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p dist-release
+          find artifacts -type f \( -name '*.dmg' -o -name '*.zip' -o -name 'SHA256SUMS_*.txt' -o -name 'INSTALL_*.txt' \) \
+            -exec cp {} dist-release/ \;
+          ls -lah dist-release
+          cat dist-release/SHA256SUMS_*.txt > dist-release/SHA256SUMS.txt
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: 绒窝 FluffNest ${{ steps.meta.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
+          generate_release_notes: true
+          body: |
+            ## 绒窝 FluffNest ${{ steps.meta.outputs.tag }}
+
+            macOS 软萌桌面宠物。下载对应芯片的安装包即可。
+
+            ### 下载哪个？
+
+            | 芯片 | 文件 |
+            |------|------|
+            | Apple Silicon（M1/M2/M3/M4） | `FluffNest_*_aarch64.dmg` |
+            | Intel | `FluffNest_*_x86_64.dmg` |
+
+            不确定：终端执行 `uname -m` → `arm64` 选 aarch64，`x86_64` 选 Intel。
+
+            ### 安装
+
+            1. 打开 DMG，把 **FluffNest** 拖进「应用程序」
+            2. 若提示「无法打开 / 已损坏」：右键 App → **打开**，或执行：
+               ```bash
+               xattr -cr /Applications/FluffNest.app
+               ```
+            3. 详细说明见仓库 [用户安装指南](docs/用户安装指南.md)
+
+            ### 校验
+
+            发布附带 `SHA256SUMS.txt`，可验证下载完整性。
+
+            > 当前构建默认**未**做 Apple Developer ID 签名与公证；正式公测前建议补签名（见 `docs/部署方案.md`）。
+          files: |
+            dist-release/*.dmg
+            dist-release/*.zip
+            dist-release/SHA256SUMS.txt
+            dist-release/INSTALL_*.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

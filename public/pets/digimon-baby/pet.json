@@ -1,0 +1,6 @@
+{
+  "id": "digimon",
+  "displayName": "Gigimon",
+  "description": "A tiny red digital monster desktop pet inspired by Gigimon.",
+  "spritesheetPath": "spritesheet.webp"
+}

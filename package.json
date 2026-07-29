@@ -1,0 +1,38 @@
+{
+  "name": "fluffnest",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build --bundles app",
+    "tauri:build:dmg": "tauri build --bundles app && bash scripts/make-dmg.sh",
+    "release:package": "bash scripts/package-release.sh",
+    "release:package:arm": "bash scripts/package-release.sh aarch64",
+    "release:package:intel": "bash scripts/package-release.sh x86_64"
+  },
+  "dependencies": {
+    "@petx/react": "^0.2.0",
+    "@pixi/react": "^8.0.5",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-store": "^2",
+    "pixi.js": "^8.19.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}
