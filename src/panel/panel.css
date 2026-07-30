@@ -83,14 +83,20 @@ html.panel-window #root {
 
 .daily-banner {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   margin-bottom: 12px;
   padding: 12px 14px;
   border-radius: 14px;
   background: linear-gradient(120deg, #efe2d4, #e4eaf2);
   border: 1px solid var(--line);
+}
+
+.daily-banner-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 
 .daily-banner strong {
@@ -101,6 +107,46 @@ html.panel-window #root {
 .daily-banner small {
   color: var(--muted);
   font-size: 12px;
+}
+
+.week-preview {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.week-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid transparent;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.week-day em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.week-day.active {
+  border-color: var(--accent);
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(61, 50, 41, 0.06);
+}
+
+.week-day.pet span {
+  color: #8a6a5a;
+}
+
+.week-day.coin span {
+  color: #7a6b4a;
 }
 
 .daily-done {
@@ -377,9 +423,83 @@ button.primary {
 }
 
 .roster-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+.dex-badge {
+  font-style: normal;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+}
+
+.dex-badge.half {
+  background: #f7f1e8;
+}
+
+.dex-badge.complete {
+  background: #eaf2ea;
+  border-color: #b7c9b7;
+}
+
+.dex-total {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.bond-track {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background: #efe6dc;
+  overflow: hidden;
+}
+
+.bond-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #d4a090, #c4a484);
+  transition: width 0.25s ease;
+}
+
+.bond-next {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.badge.bond {
+  background: linear-gradient(135deg, #fff 40%, #faf5ef);
+}
+
+.coin-hint,
+.shop-afford {
+  margin-top: 4px;
+}
+
+.shop-afford {
+  color: #6a5a4a;
+  font-weight: 500;
+}
+
+button .cost {
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+button .cost.rest {
+  color: #6a8f78;
 }
 
 .action-grid {

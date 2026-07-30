@@ -88,18 +88,26 @@ pub struct DailyReward {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyCare {
+    /// Local calendar day `YYYY-MM-DD` for bond/energy daily counters.
+    #[serde(default)]
+    pub date: String,
+    /// Bond gained today (capped by DAILY_BOND_CAP).
+    #[serde(default)]
+    pub bond_gained: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub muted: bool,
     pub focus_mode: bool,
     pub always_on_top: bool,
-    #[serde(default = "default_true")]
+    /// Dev-only full unlock. Default false — never auto-claim login gifts.
+    #[serde(default)]
     pub is_admin: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +120,12 @@ pub struct AppState {
     pub owned_actions: Vec<OwnedAction>,
     #[serde(default)]
     pub daily_login: DailyLogin,
+    /// Daily bond cap tracking.
+    #[serde(default)]
+    pub daily_care: DailyCare,
+    /// Bumped when one-shot migrations run (1 = retired forced admin unlock).
+    #[serde(default)]
+    pub care_revision: i32,
     pub settings: Settings,
     pub shop_catalog: Vec<ShopProduct>,
 }
@@ -257,11 +271,13 @@ impl Default for AppState {
             wallet: Wallet { coin: 200, gem: 0 },
             owned_actions: default_owned_actions(&now),
             daily_login: DailyLogin::default(),
+            daily_care: DailyCare::default(),
+            care_revision: 1,
             settings: Settings {
                 muted: false,
                 focus_mode: false,
                 always_on_top: true,
-                is_admin: true,
+                is_admin: false,
             },
             shop_catalog: default_shop_catalog(),
         }
@@ -308,6 +324,45 @@ pub fn grant_admin_unlocks(state: &mut AppState) {
             });
         }
     }
+}
+
+/// Daily bond gain cap (interact + reminder check-in).
+pub const DAILY_BOND_CAP: i32 = 30;
+/// Reminder / daily check-in energy cost.
+pub const CHECKIN_ENERGY_COST: i32 = 12;
+
+pub fn sync_daily_care(state: &mut AppState) {
+    let today = today_local();
+    if state.daily_care.date != today {
+        state.daily_care.date = today;
+        state.daily_care.bond_gained = 0;
+    }
+}
+
+/// Reserve bond gain against the daily cap. Returns actual allowed gain.
+pub fn take_bond_budget(state: &mut AppState, want: i32) -> i32 {
+    if want <= 0 {
+        return 0;
+    }
+    sync_daily_care(state);
+    let room = (DAILY_BOND_CAP - state.daily_care.bond_gained).max(0);
+    let gained = want.min(room);
+    state.daily_care.bond_gained += gained;
+    gained
+}
+
+pub fn spend_energy(pet: &mut PetInstance, cost: i32) -> Result<(), String> {
+    if cost <= 0 {
+        return Ok(());
+    }
+    if pet.energy < cost {
+        return Err(format!(
+            "体力不足（需要 {}，当前 {}）",
+            cost, pet.energy
+        ));
+    }
+    pet.energy -= cost;
+    Ok(())
 }
 
 fn default_shop_catalog() -> Vec<ShopProduct> {
@@ -366,7 +421,7 @@ pub fn reward_for_streak(streak: i32) -> DailyReward {
             kind: "pet".into(),
             target_id: "pinky".into(),
             amount: 1,
-            label: "解锁宠物·粉宝".into(),
+            label: "解锁宠物·粉珍珠".into(),
         },
         5 => DailyReward {
             kind: "pet".into(),
@@ -473,7 +528,32 @@ pub fn ensure_migrated(state: &mut AppState) {
     state.pets = next_pets;
 
     state.shop_catalog = default_shop_catalog();
-    grant_admin_unlocks(state);
+
+    // One-shot: older builds forced admin unlock every launch (login gifts felt auto-claimed).
+    if state.care_revision < 1 {
+        state.settings.is_admin = false;
+        for pet in state.pets.iter_mut() {
+            if let Some(seed) = seeds.iter().find(|s| s.species == pet.species_id) {
+                if seed.unlock == "login" {
+                    pet.unlocked = false;
+                    if pet.is_active {
+                        pet.is_active = false;
+                    }
+                }
+            }
+        }
+        if !state.pets.iter().any(|p| p.is_active && p.unlocked) {
+            if let Some(p) = state.pets.iter_mut().find(|p| p.unlocked) {
+                p.is_active = true;
+            }
+        }
+        state.care_revision = 1;
+    }
+
+    // Admin full-unlock only when explicitly enabled — never on every migrate.
+    if state.settings.is_admin {
+        grant_admin_unlocks(state);
+    }
     let _ = now;
 }
 

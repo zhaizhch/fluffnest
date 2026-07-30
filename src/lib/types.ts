@@ -104,6 +104,12 @@ export type DailyLogin = {
   claimedToday: boolean;
 };
 
+/** Daily bond gain counter (resets each local calendar day). */
+export type DailyCare = {
+  date: string;
+  bondGained: number;
+};
+
 export type Settings = {
   muted: boolean;
   focusMode: boolean;
@@ -117,6 +123,8 @@ export type AppState = {
   wallet: Wallet;
   ownedActions: OwnedAction[];
   dailyLogin: DailyLogin;
+  dailyCare?: DailyCare;
+  careRevision?: number;
   settings: Settings;
   shopCatalog: ShopProduct[];
 };

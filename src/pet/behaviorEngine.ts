@@ -5,6 +5,11 @@ import {
   exclusiveIdlePool,
   getCatalogAction,
 } from "../lib/actions";
+import {
+  pickTierLine,
+  softBubbleChance,
+  tierFromBond,
+} from "../lib/bondTiers";
 
 export type BehaviorStep = {
   behavior: PetBehavior;
@@ -33,10 +38,15 @@ export function buildBlinkStep(): BehaviorStep {
 
 /**
  * Small lively fidget — restored soft "蹦蹦跳跳", low frequency, short.
- * No bubbles, no warp/ultimate; walks only nudge the window a little.
+ * Higher bond biases toward clingy looks / waves / nuzzles.
  */
-export function buildSoftIdleAction(speciesId: string): BehaviorStep[] {
+export function buildSoftIdleAction(
+  speciesId: string,
+  bond = 0,
+): BehaviorStep[] {
   const personality = petDef(speciesId)?.personality ?? "calm";
+  const tier = tierFromBond(bond);
+  const bias = tier.idleBias as PetBehavior[];
 
   const tiny: PetBehavior[] = ["nod", "look", "yawn", "stretch", "wave", "sit"];
   const bounce: PetBehavior[] = [
@@ -57,6 +67,10 @@ export function buildSoftIdleAction(speciesId: string): BehaviorStep[] {
   } else {
     pool = [...tiny, "sit", "yawn", "stretch", "nod", "walk"];
   }
+  // Relationship weight — higher tiers inject bias actions more often
+  for (let i = 0; i < tier.id; i++) {
+    pool = [...pool, ...bias];
+  }
 
   const b = pick(pool);
   const short = 1100 + Math.floor(Math.random() * 900);
@@ -64,7 +78,7 @@ export function buildSoftIdleAction(speciesId: string): BehaviorStep[] {
     {
       behavior: b,
       durationMs: short,
-      bubbleChance: 0.08,
+      bubbleChance: softBubbleChance(bond),
       move: b === "walk",
       moveTiny: b === "walk",
     },
@@ -83,8 +97,8 @@ export function buildSoftIdleAction(speciesId: string): BehaviorStep[] {
 }
 
 /** @deprecated alias */
-export function buildMinuteFidget(speciesId: string): BehaviorStep {
-  return buildSoftIdleAction(speciesId)[0]!;
+export function buildMinuteFidget(speciesId: string, bond = 0): BehaviorStep {
+  return buildSoftIdleAction(speciesId, bond)[0]!;
 }
 
 /**
@@ -94,30 +108,40 @@ export function buildIdleRoutine(
   speciesId: string,
   _owned: Set<string>,
   _personality: string,
+  bond = 0,
 ): BehaviorStep[] {
-  return buildSoftIdleAction(speciesId);
+  return buildSoftIdleAction(speciesId, bond);
 }
 
 /** Each click rolls a different multi-step reaction + dialogue. */
-export function buildClickReaction(speciesId: string): {
+export function buildClickReaction(
+  speciesId: string,
+  bond = 0,
+): {
   steps: BehaviorStep[];
   apiAction: "pat" | "poke" | "hug" | "tickle" | "play" | "feed";
 } {
   const def = petDef(speciesId);
   const category = def?.category;
   const exclusives = exclusiveIdlePool(speciesId);
+  const tier = tierFromBond(bond);
 
   const withTalk = (
     steps: BehaviorStep[],
     fallbackLine?: string,
   ): BehaviorStep[] => {
-    const line =
-      fallbackLine ??
-      pick([
-        pickClingyLine(),
-        ...(getCatalogAction(steps[0]?.behavior ?? "idle", category)?.bubbles ??
-          []),
-      ]);
+    const tierLine = pickTierLine(bond);
+    const clingy = pickClingyLine();
+    const catalog =
+      getCatalogAction(steps[0]?.behavior ?? "idle", category)?.bubbles ?? [];
+    // Higher bond → prefer tier / clingy lines over generic catalog
+    const pool =
+      tier.id >= 3
+        ? [tierLine, tierLine, clingy, ...catalog]
+        : tier.id >= 1
+          ? [tierLine, clingy, ...catalog]
+          : [clingy, ...catalog, tierLine];
+    const line = fallbackLine ?? pick(pool);
     return steps.map((s, i) =>
       i === 0
         ? { ...s, bubbleChance: 1, bubble: s.bubble ?? line }

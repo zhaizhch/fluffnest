@@ -273,12 +273,12 @@ export function PetApp() {
           }
 
           await runSequence(
-            buildSoftIdleAction(active.speciesId),
+            buildSoftIdleAction(active.speciesId, active.bond),
             active.speciesId,
           );
           nextSoftAt = Date.now() + nextSoftActionDelayMs();
 
-          if (Math.random() < 0.35) {
+          if (Math.random() < 0.55) {
             try {
               await api.tickIdle();
             } catch {
@@ -348,7 +348,8 @@ export function PetApp() {
       clickCount.current = 0;
       if (n >= 2) return;
       const speciesId = petRef.current?.speciesId ?? "mochi";
-      const reaction = buildClickReaction(speciesId);
+      const bond = petRef.current?.bond ?? 0;
+      const reaction = buildClickReaction(speciesId, bond);
       sequenceGen.current += 1;
       void runSequence(reaction.steps, speciesId, {
         userInitiated: true,
@@ -358,6 +359,10 @@ export function PetApp() {
         await api.interact(reaction.apiAction);
       } catch (err) {
         console.error(err);
+        showBubble(
+          String(err).replace(/^.*Error:\s*/i, "") || "体力不足",
+          2200,
+        );
       }
     }, 220);
   };

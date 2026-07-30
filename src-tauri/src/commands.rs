@@ -1,6 +1,7 @@
 use crate::state::{
-    prepare_daily_login, reward_for_streak, save_state, today_string, AppState, DailyLogin,
-    OwnedAction, PetInstance, ReminderRule, Settings, Wallet,
+    prepare_daily_login, reward_for_streak, save_state, spend_energy, sync_daily_care,
+    take_bond_budget, today_string, AppState, DailyLogin, OwnedAction, PetInstance, ReminderRule,
+    Settings, Wallet, CHECKIN_ENERGY_COST,
 };
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, Manager};
@@ -39,6 +40,7 @@ pub fn get_state(app: AppHandle) -> Result<AppState, String> {
     let shared = app.state::<SharedState>();
     let mut guard = shared.0.lock().map_err(|e| e.to_string())?;
     prepare_daily_login(&mut guard);
+    sync_daily_care(&mut guard);
     Ok(guard.clone())
 }
 
@@ -57,48 +59,62 @@ pub fn get_active_pet(app: AppHandle) -> Result<PetInstance, String> {
 #[tauri::command]
 pub fn interact(app: AppHandle, action: String) -> Result<PetInstance, String> {
     with_state(&app, |state| {
-        let pet = state
+        sync_daily_care(state);
+        let idx = state
             .pets
-            .iter_mut()
-            .find(|p| p.is_active && p.unlocked)
+            .iter()
+            .position(|p| p.is_active && p.unlocked)
             .ok_or_else(|| "no active pet".to_string())?;
-        match action.as_str() {
-            "pet" | "pat" => {
-                pet.mood = (pet.mood + 8).min(100);
-                pet.bond += 1;
+
+        let (energy_cost, bond_want, mood_delta, energy_delta): (i32, i32, i32, i32) =
+            match action.as_str() {
+                "pet" | "pat" => (4, 1, 8, 0),
+                "poke" => (3, 1, 4, 0),
+                "hug" => (6, 3, 10, 0),
+                "tickle" => (5, 2, 9, 0),
+                "play" => (8, 2, 12, 0),
+                "feed" => (0, 2, 5, 15),
+                _ => (0, 0, 0, 0),
+            };
+
+        {
+            let pet = &mut state.pets[idx];
+            spend_energy(pet, energy_cost)?;
+            if energy_delta > 0 {
+                pet.energy = (pet.energy + energy_delta).min(100);
             }
-            "feed" => {
-                pet.energy = (pet.energy + 15).min(100);
-                pet.mood = (pet.mood + 5).min(100);
-                pet.bond += 2;
-            }
-            "play" => {
-                pet.energy = (pet.energy - 8).max(0);
-                pet.mood = (pet.mood + 12).min(100);
-                pet.bond += 2;
-            }
-            "poke" => {
-                pet.mood = (pet.mood + 4).min(100);
-                pet.bond += 1;
-            }
-            "hug" => {
-                pet.mood = (pet.mood + 10).min(100);
-                pet.energy = (pet.energy + 5).min(100);
-                pet.bond += 3;
-            }
-            "tickle" => {
-                pet.mood = (pet.mood + 9).min(100);
-                pet.energy = (pet.energy - 3).max(0);
-                pet.bond += 2;
-            }
-            _ => {}
+            pet.mood = (pet.mood + mood_delta).clamp(0, 100);
+            pet.last_interact_at = Utc::now().to_rfc3339();
         }
-        pet.last_interact_at = Utc::now().to_rfc3339();
-        let snapshot = pet.clone();
+
+        let bond_before = state.pets[idx].bond;
+        let gained = take_bond_budget(state, bond_want);
+        state.pets[idx].bond += gained;
+
+        let mut gift = 0i32;
+        let thresholds: &[(i32, i32)] = &[(20, 8), (60, 12), (120, 20), (220, 35)];
+        for &(min_bond, coins) in thresholds {
+            if bond_before < min_bond && state.pets[idx].bond >= min_bond {
+                gift = coins;
+            }
+        }
+        if gift > 0 {
+            state.wallet.coin += gift;
+            let _ = app.emit("wallet-updated", state.wallet.clone());
+        }
+
+        let snapshot = state.pets[idx].clone();
         let _ = app.emit("pet-updated", snapshot.clone());
         let _ = app.emit(
             "pet-action",
-            serde_json::json!({ "action": action, "speciesId": snapshot.species_id }),
+            serde_json::json!({
+                "action": action,
+                "speciesId": snapshot.species_id,
+                "bondGift": gift,
+                "bond": snapshot.bond,
+                "bondGained": gained,
+                "bondCapped": bond_want > 0 && gained < bond_want,
+            }),
         );
         Ok(snapshot)
     })
@@ -136,10 +152,8 @@ pub fn switch_pet(app: AppHandle, pet_id: String) -> Result<PetInstance, String>
 #[tauri::command]
 pub fn update_settings(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     with_state(&app, |state| {
-        let keep_admin = state.settings.is_admin || settings.is_admin;
         state.settings = settings.clone();
-        state.settings.is_admin = keep_admin;
-        if keep_admin {
+        if state.settings.is_admin {
             crate::state::grant_admin_unlocks(state);
         }
         if let Some(win) = app.get_webview_window("pet") {
@@ -194,14 +208,26 @@ pub fn delete_reminder(app: AppHandle, id: String) -> Result<Vec<ReminderRule>, 
 #[tauri::command]
 pub fn complete_reminder(app: AppHandle, id: String) -> Result<Wallet, String> {
     with_state(&app, |state| {
+        sync_daily_care(state);
+        let idx = state
+            .pets
+            .iter()
+            .position(|p| p.is_active && p.unlocked)
+            .ok_or_else(|| "no active pet".to_string())?;
+
+        spend_energy(&mut state.pets[idx], CHECKIN_ENERGY_COST)?;
+
         if let Some(rule) = state.reminders.iter_mut().find(|r| r.id == id) {
             rule.last_fired_at = Some(Utc::now().to_rfc3339());
         }
-        if let Some(pet) = state.pets.iter_mut().find(|p| p.is_active && p.unlocked) {
-            pet.bond += 3;
-            pet.mood = (pet.mood + 5).min(100);
-        }
+
+        let gained = take_bond_budget(state, 3);
+        state.pets[idx].bond += gained;
+        state.pets[idx].mood = (state.pets[idx].mood + 5).min(100);
+
         state.wallet.coin += 5;
+        let snapshot = state.pets[idx].clone();
+        let _ = app.emit("pet-updated", snapshot);
         let _ = app.emit("wallet-updated", state.wallet.clone());
         Ok(state.wallet.clone())
     })
@@ -284,10 +310,29 @@ pub fn claim_daily_login(app: AppHandle) -> Result<AppState, String> {
         };
 
         let reward = reward_for_streak(next_streak);
+        let mut applied = reward.clone();
         match reward.kind.as_str() {
             "coin" => state.wallet.coin += reward.amount,
             "action" => unlock_action(state, &reward.target_id),
-            "pet" => unlock_pet(state, &reward.target_id),
+            "pet" => {
+                let already = state
+                    .pets
+                    .iter()
+                    .any(|p| p.species_id == reward.target_id && p.unlocked);
+                if already {
+                    const FALLBACK: i32 = 80;
+                    state.wallet.coin += FALLBACK;
+                    applied.kind = "coin".into();
+                    applied.target_id = "coin".into();
+                    applied.amount = FALLBACK;
+                    applied.label = format!(
+                        "已拥有该宠物，折合金币 ×{}",
+                        FALLBACK
+                    );
+                } else {
+                    unlock_pet(state, &reward.target_id);
+                }
+            }
             _ => {}
         }
 
@@ -299,7 +344,8 @@ pub fn claim_daily_login(app: AppHandle) -> Result<AppState, String> {
             claimed_today: true,
         };
 
-        let _ = app.emit("daily-claimed", reward);
+        let _ = app.emit("daily-claimed", applied);
+        let _ = app.emit("wallet-updated", state.wallet.clone());
         Ok(state.clone())
     })
 }
@@ -312,13 +358,15 @@ pub fn tick_idle(app: AppHandle) -> Result<PetInstance, String> {
             .iter_mut()
             .find(|p| p.is_active && p.unlocked)
             .ok_or_else(|| "no active pet".to_string())?;
-        if !state.settings.focus_mode {
-            pet.energy = (pet.energy - 1).max(0);
-            if pet.energy < 20 {
-                pet.mood = (pet.mood - 1).max(0);
-            }
+        // Slow stamina recovery (hanging out / resting). Focus mode recovers slower.
+        let gain = if state.settings.focus_mode { 1 } else { 2 };
+        pet.energy = (pet.energy + gain).min(100);
+        if pet.energy >= 40 && pet.mood < 100 {
+            pet.mood = (pet.mood + 1).min(100);
         }
-        Ok(pet.clone())
+        let snapshot = pet.clone();
+        let _ = app.emit("pet-updated", snapshot.clone());
+        Ok(snapshot)
     })
 }
 
