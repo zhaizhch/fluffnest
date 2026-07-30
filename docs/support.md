@@ -10,7 +10,7 @@
 
 | 微信 | 支付宝 |
 |------|--------|
-| <img src="./assets/qr-wechat.png" alt="微信收款码" width="220" /> | <img src="./assets/qr-alipay.png" alt="支付宝收款码" width="220" /> |
+| <img src="./assets/qr-wechat-v2.png" alt="微信收款码" width="220" /> | <img src="./assets/qr-alipay-v2.png" alt="支付宝收款码" width="220" /> |
 
 ## 海外 / International
 

@@ -196,9 +196,9 @@ npx tsx scripts/verify-bond-collect.ts
 - 海外：优先 [GitHub Sponsors](https://github.com/sponsors/zhaizhch)
 
 <p align="center">
-  <img src="docs/assets/qr-wechat.png" alt="微信收款码" width="180" />
+  <img src="docs/assets/qr-wechat-v2.png" alt="微信收款码" width="180" />
   &nbsp;&nbsp;
-  <img src="docs/assets/qr-alipay.png" alt="支付宝收款码" width="180" />
+  <img src="docs/assets/qr-alipay-v2.png" alt="支付宝收款码" width="180" />
 </p>
 
 <p align="center"><sub>微信 · 支付宝（扫码打赏）</sub></p>
