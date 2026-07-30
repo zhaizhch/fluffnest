@@ -1,0 +1,21 @@
+{
+  "explorer.excludeGitIgnore": true,
+  "files.exclude": {
+    "**/dist": true,
+    "**/dist-ssr": true,
+    "**/dist-release": true,
+    "**/release": true,
+    "**/node_modules": true,
+    "**/src-tauri/target": true
+  },
+  "files.watcherExclude": {
+    "**/dist/**": true,
+    "**/node_modules/**": true,
+    "**/src-tauri/target/**": true
+  },
+  "search.exclude": {
+    "**/dist": true,
+    "**/node_modules": true,
+    "**/src-tauri/target": true
+  }
+}

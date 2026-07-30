@@ -1,0 +1,9 @@
+# Build / deps — keep out of Cursor index & context
+node_modules/
+dist/
+dist-ssr/
+dist-release/
+release/
+src-tauri/target/
+*.log
+.DS_Store
