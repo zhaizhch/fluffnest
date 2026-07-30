@@ -65,8 +65,22 @@ export function LionFigure({
         <ellipse cx="80" cy="72" rx="10" ry="6" fill={mane} />
       </g>
       <g className="props">
-        <g className="prop-ball"><circle cx="130" cy="170" r="10" fill="#fff" stroke={ink} /><path d="M122 170h16M130 162v16" stroke={ink} opacity="0.4" /></g>
-        <g className="prop-rope"><path d="M45 140 Q80 100 115 140" fill="none" stroke={mane} strokeWidth="3" /></g>
+        {/* Rising-style green shield badge */}
+        <g className="prop-shield" transform="translate(118 48)">
+          <path
+            d="M12 0 L24 4 L24 14 Q24 24 12 30 Q0 24 0 14 L0 4 Z"
+            fill={palette.accent}
+            opacity="0.95"
+          />
+          <path
+            d="M7 14 L11 18 L18 9"
+            fill="none"
+            stroke="#fff"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </g>
       </g>
     </svg>
   );

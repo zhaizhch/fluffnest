@@ -19,6 +19,13 @@ import {
   type BehaviorStep,
 } from "./behaviorEngine";
 import { nextSoftActionDelayMs } from "./quietSchedule";
+import {
+  buildRisingClickAction,
+  buildRisingFocusSleep,
+  buildRisingIdleAction,
+  nextRisingActionDelayMs,
+  type RisingStep,
+} from "./risingKakaBehavior";
 import { PetFigure } from "./PetFigure";
 import "./pet.css";
 
@@ -43,6 +50,8 @@ export function PetApp() {
   const [behavior, setBehavior] = useState<PetBehavior>("idle");
   const [bubble, setBubble] = useState<string | null>(null);
   const [facing, setFacing] = useState<"left" | "right">("right");
+  /** Rising KaKa explicit APNG action (Dragging / RbtnClk / StopDrag…) */
+  const [risingAction, setRisingAction] = useState<string | null>(null);
   const dragRef = useRef(false);
   const walkDir = useRef(1);
   const busyUntil = useRef(0);
@@ -178,14 +187,58 @@ export function PetApp() {
     [maybeMove, maybeWarp, showBubble],
   );
 
+  /** Rising KaKa: drive original APNG actions (no FluffNest behavior remap). */
+  const runRisingSteps = useCallback(
+    async (steps: RisingStep[], opts?: { userInitiated?: boolean }) => {
+      const gen = ++sequenceGen.current;
+      if (opts?.userInitiated) userSeqActive.current = true;
+      setBubble(null);
+
+      for (const step of steps) {
+        if (gen !== sequenceGen.current) return;
+        busyUntil.current = Date.now() + step.durationMs;
+        setRisingAction(step.action);
+        if (step.action === "Sleeping" || step.action === "StaSleep") {
+          setBehavior("sleep");
+        } else if (step.warp) {
+          setBehavior("warp");
+        } else {
+          setBehavior("idle");
+        }
+
+        if (step.warp) {
+          await sleep(Math.min(280, step.durationMs * 0.4));
+          if (gen !== sequenceGen.current) return;
+          void maybeWarp();
+          await sleep(
+            Math.max(0, step.durationMs - Math.min(280, step.durationMs * 0.4)),
+          );
+        } else {
+          await sleep(step.durationMs);
+        }
+      }
+
+      if (gen === sequenceGen.current) {
+        setRisingAction("Stand");
+        setBehavior("idle");
+        busyUntil.current = Date.now() + 200;
+        if (opts?.userInitiated) userSeqActive.current = false;
+      }
+    },
+    [maybeWarp],
+  );
+
   useEffect(() => {
     api.getActivePet().then(setPet).catch(console.error);
 
     const unsubs = [
       listen<PetInstance>("pet-updated", (e) => setPet(e.payload)),
       listen<{ action: string; speciesId: string }>("pet-action", (e) => {
-        // Panel/API interact — treat as user interaction with talk
         if (userSeqActive.current) return;
+        if (e.payload.speciesId === "rising") {
+          void runRisingSteps(buildRisingClickAction(), { userInitiated: true });
+          return;
+        }
         const a = e.payload.action as PetBehavior;
         const visual = a === ("pet" as PetBehavior) ? "pat" : a;
         void runSequence(
@@ -196,6 +249,16 @@ export function PetApp() {
       }),
       listen<{ id: string; title: string }>("reminder-fired", (e) => {
         const species = petRef.current?.speciesId ?? "mochi";
+        if (species === "rising") {
+          void runRisingSteps(
+            [
+              { action: "Hello", durationMs: 2000 },
+              { action: "Stand", durationMs: 1600 },
+            ],
+            { userInitiated: true },
+          );
+          return;
+        }
         void runSequence(
           [
             {
@@ -214,9 +277,9 @@ export function PetApp() {
     return () => {
       unsubs.forEach((p) => p.then((u) => u()));
     };
-  }, [runSequence]);
+  }, [runSequence, runRisingSteps]);
 
-  // Quiet life: PixiPet blinks ~1.5–2s; soft little hops every ~14–22s
+  // Quiet life / Rising KaKa original schedule
   useEffect(() => {
     let cancelled = false;
 
@@ -240,15 +303,23 @@ export function PetApp() {
 
         try {
           const state = await api.getState();
+          const active =
+            state.pets.find((p) => p.isActive && p.unlocked) ?? null;
+          const isRising = active?.speciesId === "rising";
+
           if (state.settings.focusMode) {
-            setBehavior("sleep");
             setBubble(null);
-            await sleep(15000);
+            if (isRising && active) {
+              setPet(active);
+              await runRisingSteps(buildRisingFocusSleep());
+            } else {
+              setBehavior("sleep");
+              setRisingAction(null);
+              await sleep(15000);
+            }
             continue;
           }
 
-          const active =
-            state.pets.find((p) => p.isActive && p.unlocked) ?? null;
           if (!active) {
             await sleep(4000);
             continue;
@@ -257,7 +328,15 @@ export function PetApp() {
           if (!userSeqActive.current) {
             setBehavior("idle");
             setBubble(null);
+            if (isRising) setRisingAction("Stand");
+            else setRisingAction(null);
           }
+
+          const delayMs = isRising
+            ? nextRisingActionDelayMs()
+            : nextSoftActionDelayMs();
+          // align next tick if species just switched
+          if (nextSoftAt < Date.now() - 60_000) nextSoftAt = Date.now() + delayMs;
 
           const waitMs = Math.max(0, nextSoftAt - Date.now());
           const wakeAt = Date.now() + waitMs;
@@ -268,15 +347,22 @@ export function PetApp() {
           if (cancelled) return;
           await waitWhileBusy();
           if (userSeqActive.current) {
-            nextSoftAt = Date.now() + nextSoftActionDelayMs();
+            nextSoftAt =
+              Date.now() +
+              (isRising ? nextRisingActionDelayMs() : nextSoftActionDelayMs());
             continue;
           }
 
-          await runSequence(
-            buildSoftIdleAction(active.speciesId, active.bond),
-            active.speciesId,
-          );
-          nextSoftAt = Date.now() + nextSoftActionDelayMs();
+          if (isRising) {
+            await runRisingSteps(buildRisingIdleAction());
+            nextSoftAt = Date.now() + nextRisingActionDelayMs();
+          } else {
+            await runSequence(
+              buildSoftIdleAction(active.speciesId, active.bond),
+              active.speciesId,
+            );
+            nextSoftAt = Date.now() + nextSoftActionDelayMs();
+          }
 
           if (Math.random() < 0.55) {
             try {
@@ -286,7 +372,10 @@ export function PetApp() {
             }
           }
 
-          if (!userSeqActive.current) setBehavior("idle");
+          if (!userSeqActive.current) {
+            setBehavior("idle");
+            if (isRising) setRisingAction("Stand");
+          }
         } catch {
           await sleep(5000);
         }
@@ -298,13 +387,30 @@ export function PetApp() {
       cancelled = true;
       sequenceGen.current += 1;
     };
-  }, [runSequence]);
+  }, [runSequence, runRisingSteps]);
+
+  const risingActionTimer = useRef<number | null>(null);
+  const risingDragPhase = useRef(false);
+
+  const clearRisingActionSoon = useCallback((ms: number) => {
+    if (risingActionTimer.current) window.clearTimeout(risingActionTimer.current);
+    risingActionTimer.current = window.setTimeout(() => {
+      setRisingAction(null);
+      risingActionTimer.current = null;
+    }, ms);
+  }, []);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     suppressClick.current = false;
     ptrDownPos.current = { x: e.screenX, y: e.screenY };
     dragRef.current = true;
+    risingDragPhase.current = false;
+    if (petRef.current?.speciesId === "rising") {
+      sequenceGen.current += 1;
+      userSeqActive.current = false;
+      setRisingAction("StatDrag");
+    }
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -316,17 +422,32 @@ export function PetApp() {
       // Real drag: hand window to OS; skip the following click
       suppressClick.current = true;
       ptrDownPos.current = null;
+      if (petRef.current?.speciesId === "rising") {
+        risingDragPhase.current = true;
+        sequenceGen.current += 1;
+        setRisingAction("Dragging");
+      }
       void getCurrentWindow()
         .startDragging()
         .catch(() => undefined)
         .finally(() => {
           dragRef.current = false;
+          if (petRef.current?.speciesId === "rising" && risingDragPhase.current) {
+            risingDragPhase.current = false;
+            setRisingAction("StopDrag");
+            clearRisingActionSoon(750);
+          }
         });
     }
   };
 
   const onPointerUp = () => {
-    if (!suppressClick.current) dragRef.current = false;
+    if (!suppressClick.current) {
+      dragRef.current = false;
+      if (petRef.current?.speciesId === "rising" && !risingDragPhase.current) {
+        setRisingAction(null);
+      }
+    }
     ptrDownPos.current = null;
   };
 
@@ -348,6 +469,19 @@ export function PetApp() {
       clickCount.current = 0;
       if (n >= 2) return;
       const speciesId = petRef.current?.speciesId ?? "mochi";
+      if (speciesId === "rising") {
+        void runRisingSteps(buildRisingClickAction(), { userInitiated: true });
+        try {
+          await api.interact("pat");
+        } catch (err) {
+          console.error(err);
+          showBubble(
+            String(err).replace(/^.*Error:\s*/i, "") || "体力不足",
+            2200,
+          );
+        }
+        return;
+      }
       const bond = petRef.current?.bond ?? 0;
       const reaction = buildClickReaction(speciesId, bond);
       sequenceGen.current += 1;
@@ -387,10 +521,26 @@ export function PetApp() {
       onClick={onClick}
       onContextMenu={(e) => {
         e.preventDefault();
+        if (petRef.current?.speciesId === "rising") {
+          sequenceGen.current += 1;
+          userSeqActive.current = false;
+          setRisingAction("RbtnClk");
+          clearRisingActionSoon(1400);
+          window.setTimeout(() => openPanel(), 500);
+          return;
+        }
         openPanel();
       }}
       onDoubleClick={() => {
         clickCount.current = 0;
+        if (petRef.current?.speciesId === "rising") {
+          sequenceGen.current += 1;
+          userSeqActive.current = false;
+          setRisingAction("DblClk");
+          clearRisingActionSoon(1100);
+          window.setTimeout(() => openPanel(), 400);
+          return;
+        }
         openPanel();
       }}
       style={
@@ -425,6 +575,7 @@ export function PetApp() {
             species={species}
             behavior={visual}
             facing={facing}
+            risingAction={species === "rising" ? risingAction : null}
           />
         </div>
       </div>

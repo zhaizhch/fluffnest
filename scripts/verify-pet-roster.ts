@@ -62,14 +62,28 @@ check(onlyFront.length === 0, `frontend⊆rust (missing ${onlyFront.join(",") ||
 check(onlyRust.length === 0, `rust⊆frontend (extra ${onlyRust.join(",") || "none"})`);
 
 for (const p of PET_CATALOG) {
+  if (p.render === "apng") {
+    try {
+      readFileSync("public/pets/rising-kaka/apng/Stand.png");
+      check(true, `apng rising-kaka pack for ${p.id}`);
+    } catch {
+      check(false, `apng rising-kaka pack for ${p.id}`);
+    }
+    continue;
+  }
+  if (p.render === "svg") {
+    check(true, `svg figure ${p.id} (no spritesheet)`);
+    continue;
+  }
   const path = `public${p.sprite}`;
   try {
     readFileSync(path);
+    check(true, `sprite exists ${p.sprite}`);
   } catch {
     check(false, `sprite exists ${p.sprite}`);
   }
 }
-check(true, `all ${PET_CATALOG.length} sprites readable`);
+check(true, `all ${PET_CATALOG.length} pets checked`);
 
 console.log(
   `\ncompanion (${companion.length}):`,

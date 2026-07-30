@@ -154,6 +154,7 @@ fn catalog() -> Vec<PetSeed> {
         PetSeed { id: "pet-axo", species: "axo", name: "波波", personality: "clingy", unlock: "shop", rarity: "R", price: 80 },
         PetSeed { id: "pet-cha", species: "cha", name: "茶茶", personality: "calm", unlock: "shop", rarity: "R", price: 90 },
         PetSeed { id: "pet-leo", species: "leo", name: "软狮", personality: "lively", unlock: "shop", rarity: "SR", price: 120 },
+        PetSeed { id: "pet-rising", species: "rising", name: "瑞星小狮子", personality: "lively", unlock: "shop", rarity: "SR", price: 128 },
         PetSeed { id: "pet-otta", species: "otta", name: "獭獭", personality: "clingy", unlock: "shop", rarity: "R", price: 95 },
         PetSeed { id: "pet-kebo", species: "kebo", name: "柯宝", personality: "lively", unlock: "shop", rarity: "SR", price: 130 },
         // companion (humanoid)

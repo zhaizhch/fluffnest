@@ -180,12 +180,19 @@ html.pet-window #root {
   background: rgba(40, 28, 16, 0.12);
 }
 
-.soft-pet {
+.rising-kaka {
   display: grid;
   place-items: center;
   line-height: 0;
-  transform-origin: 50% 92%;
+  background: transparent !important;
 }
+
+.rising-kaka img {
+  image-rendering: auto;
+  user-select: none;
+  pointer-events: none;
+}
+
 
 .soft-pet svg {
   overflow: visible;

@@ -19,7 +19,7 @@ import {
   type PetCategoryId,
 } from "../lib/petCatalog";
 import type { AppState, ReminderRule } from "../lib/types";
-import { SpritePet } from "../pet/SpritePet";
+import { PetFigure } from "../pet/PetFigure";
 import "./panel.css";
 
 type Tab = "status" | "roster" | "reminders" | "shop" | "settings";
@@ -221,7 +221,7 @@ export function PanelApp() {
         {tab === "status" && (
           <section className="card">
             <div className="status-hero">
-              <SpritePet
+              <PetFigure
                 species={active.speciesId}
                 behavior="idle"
                 size={140}
@@ -449,7 +449,7 @@ export function PanelApp() {
                           }}
                         >
                           <span className="skin-preview" aria-hidden>
-                            <SpritePet
+                            <PetFigure
                               species={p.speciesId}
                               behavior="idle"
                               size={88}

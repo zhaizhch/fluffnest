@@ -13,9 +13,11 @@ export type PetDef = {
   name: string;
   category: PetCategoryId;
   personality: "calm" | "lively" | "clingy";
-  /** Codex atlas path */
-  sprite: string;
+  /** Codex atlas path; omit when render is apng/svg */
+  sprite?: string;
   spriteVersion?: number;
+  /** Default sprite atlas; apng = Rising KaKa original animations */
+  render?: "sprite" | "svg" | "apng";
   vibe: string;
   /** default = unlocked at start */
   unlock: "default" | "shop" | "login";
@@ -101,6 +103,17 @@ export const PET_CATALOG: PetDef[] = [
     unlock: "shop",
     rarity: "SR",
     shopPrice: 120,
+  },
+  {
+    id: "rising",
+    name: "瑞星小狮子",
+    category: "fluff",
+    personality: "lively",
+    render: "apng",
+    vibe: "瑞星卡卡 · 原版动作 + 空间跳跃",
+    unlock: "shop",
+    rarity: "SR",
+    shopPrice: 128,
   },
   {
     id: "otta",
@@ -737,8 +750,18 @@ export function spriteFor(speciesId: string): {
 } {
   const def = petDef(speciesId) ?? PET_CATALOG[0]!;
   return {
-    src: def.sprite,
+    src: def.sprite ?? "/pets/butter-bear/spritesheet.webp",
     spriteVersionNumber: def.spriteVersion,
     label: def.name,
   };
+}
+
+export function usesCustomFigure(speciesId: string): boolean {
+  const render = petDef(speciesId)?.render;
+  return render === "svg" || render === "apng";
+}
+
+/** @deprecated use usesCustomFigure */
+export function usesSvgFigure(speciesId: string): boolean {
+  return usesCustomFigure(speciesId);
 }
