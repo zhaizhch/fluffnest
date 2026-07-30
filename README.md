@@ -1,7 +1,7 @@
 # 绒窝 FluffNest
 
 <p align="center">
-  <img src="docs/assets/demo.gif" alt="绒窝 FluffNest 桌面宠物演示" width="720" />
+  <img src="docs/assets/demo-preview.gif" alt="绒窝 FluffNest 桌面宠物预览 · 暖卡卡" width="448" />
 </p>
 
 <p align="center">
@@ -31,14 +31,6 @@
 </p>
 
 > **下载许可**：本软件及安装包仅供 **个人免费体验**，**禁止任何商业用途**（售卖、收费分发、广告变现、商业产品内嵌等）。精灵素材亦不可商用。完整条款见 [LICENSE](./LICENSE)。
-
-### 精灵预览
-
-<p align="center">
-  <img src="docs/assets/preview-nuankaka.png" alt="暖卡卡预览" width="240" />
-</p>
-
-<p align="center"><sub>暖卡卡 · 桌面精灵预览</sub></p>
 
 ---
 
