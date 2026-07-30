@@ -169,7 +169,7 @@ def main() -> None:
     )
 
 
-def load_row_frames(pack: str, row: int, n: int) -> list[Image.Image]:
+def load_row_frames(pack: str, row: int, n: int, scale: float = 1.55) -> list[Image.Image]:
     sheet = Image.open(ROOT / "public" / "pets" / pack / "spritesheet.webp").convert(
         "RGBA"
     )
@@ -179,7 +179,7 @@ def load_row_frames(pack: str, row: int, n: int) -> list[Image.Image]:
         y = row * CELL_H
         cell = sheet.crop((x, y, x + CELL_W, y + CELL_H))
         cell = cell.resize(
-            (int(CELL_W * 2.0), int(CELL_H * 2.0)), Image.Resampling.NEAREST
+            (int(CELL_W * scale), int(CELL_H * scale)), Image.Resampling.NEAREST
         )
         frames.append(cell)
     return frames
@@ -192,119 +192,182 @@ def write_warp_gif(
     tint: tuple[int, int, int],
     seed: int,
 ) -> None:
+    """A → B space jump: idle at A, vanish, travel streak, appear at B."""
     import math
     import random
 
     jump = load_row_frames(pack, 4, 5)
     idle = load_row_frames(pack, 0, 4)
     pw, ph = jump[0].size
-    w, h = 520, 420
+    w, h = 640, 400
     font_path = "/Library/Fonts/Arial Unicode.ttf"
-    font_lg = ImageFont.truetype(font_path, 26)
+    font_lg = ImageFont.truetype(font_path, 24)
     font_sm = ImageFont.truetype(font_path, 14)
-    left_x, right_x = 36, w - pw - 36
-    base_y = (h - ph) // 2 + 16
+    font_tiny = ImageFont.truetype(font_path, 13)
+
+    left_x = 48
+    right_x = w - pw - 48
+    base_y = (h - ph) // 2 + 20
+    left_cx = left_x + pw // 2
+    right_cx = right_x + pw // 2
+    foot_y = base_y + ph - 8
 
     def make_bg() -> Image.Image:
-        im = Image.new("RGBA", (w, h), (22, 20, 36, 255))
+        im = Image.new("RGBA", (w, h), (24, 22, 38, 255))
         d = ImageDraw.Draw(im)
         rng = random.Random(42 + seed)
-        for _ in range(90):
+        for _ in range(100):
             x, y = rng.randint(0, w - 1), rng.randint(0, h - 1)
             r = rng.randint(1, 2)
             d.ellipse(
                 [x - r, y - r, x + r, y + r],
-                fill=(255, 255, 255, rng.randint(100, 230)),
+                fill=(255, 255, 255, rng.randint(90, 220)),
             )
-        for cx, cy, rad in [(w * 0.25, h * 0.3, 120), (w * 0.75, h * 0.55, 140)]:
+        for cx, cy, rad, a in [
+            (w * 0.2, h * 0.35, 110, 45),
+            (w * 0.8, h * 0.55, 130, 40),
+        ]:
             ov = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             ImageDraw.Draw(ov).ellipse(
-                [cx - rad, cy - rad, cx + rad, cy + rad], fill=(*tint, 50)
+                [cx - rad, cy - rad, cx + rad, cy + rad], fill=(*tint, a)
             )
             im = Image.alpha_composite(im, ov)
         return im
 
     def ring(d: ImageDraw.ImageDraw, cx: int, cy: int, r: int, color, width=3):
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=width)
+        if r > 0:
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=width)
 
-    def stamp(fr: Image.Image) -> Image.Image:
+    def place_pads(fr: Image.Image) -> None:
         d = ImageDraw.Draw(fr)
-        d.rounded_rectangle(
-            [16, 14, w - 16, 56], radius=10, fill=(255, 252, 247, 235)
+        for t in range(12):
+            x0 = left_cx + 30 + t * ((right_cx - left_cx - 60) / 11)
+            y0 = foot_y + 4
+            if t % 2 == 0:
+                d.ellipse([x0 - 2, y0 - 2, x0 + 2, y0 + 2], fill=(*tint, 100))
+        mx = (left_cx + right_cx) // 2
+        d.polygon(
+            [
+                (mx - 14, foot_y),
+                (mx + 14, foot_y),
+                (mx + 14, foot_y - 1),
+                (mx + 22, foot_y + 4),
+                (mx + 14, foot_y + 9),
+                (mx + 14, foot_y + 8),
+                (mx - 14, foot_y + 8),
+            ],
+            fill=(*tint, 160),
         )
-        d.text((28, 22), title, fill=(61, 50, 41, 255), font=font_lg)
-        d.text((28, h - 36), "空间跳跃 · warp", fill=(230, 220, 240, 230), font=font_sm)
+        for cx, label, name in [
+            (left_cx, "A", "起点"),
+            (right_cx, "B", "终点"),
+        ]:
+            d.ellipse([cx - 18, foot_y + 1, cx + 18, foot_y + 11], fill=(255, 255, 255, 40))
+            d.text((cx - 10, foot_y + 14), label, fill=(255, 240, 230, 220), font=font_tiny)
+            d.text((cx - 16, foot_y + 28), name, fill=(200, 190, 210, 200), font=font_tiny)
+
+    def stamp(fr: Image.Image, subtitle: str) -> Image.Image:
+        d = ImageDraw.Draw(fr)
+        d.rounded_rectangle([16, 12, w - 16, 52], radius=10, fill=(255, 252, 247, 235))
+        d.text((28, 20), title, fill=(61, 50, 41, 255), font=font_lg)
+        d.text((28, h - 32), subtitle, fill=(230, 220, 240, 230), font=font_sm)
         return fr
 
     timeline: list[Image.Image] = []
-    for i in range(4):
+
+    for i in range(5):
         fr = make_bg()
-        fr.alpha_composite(idle[i % len(idle)], (left_x, base_y + [0, -3, -5, -2][i]))
-        timeline.append(stamp(fr))
+        place_pads(fr)
+        fr.alpha_composite(idle[i % len(idle)], (left_x, base_y + [0, -2, -4, -2, 0][i]))
+        timeline.append(stamp(fr, "在起点蓄力…"))
+
     for i, jf in enumerate(jump):
         fr = make_bg()
-        lift = -i * 12
-        ghost = jf.copy()
-        ghost.putalpha(ghost.split()[-1].point(lambda a: int(a * 0.3)))
-        fr.alpha_composite(ghost, (left_x + i * 6, base_y + lift + 10))
-        fr.alpha_composite(jf, (left_x + i * 10, base_y + lift))
+        place_pads(fr)
+        lift = -i * 14
+        fr.alpha_composite(jf, (left_x, base_y + lift))
         if i >= 2:
             d = ImageDraw.Draw(fr)
-            ring(
-                d,
-                left_x + pw // 2 + i * 10,
-                base_y + ph // 2 + lift,
-                28 + i * 14,
-                (*tint, 190),
-                2,
-            )
-        timeline.append(stamp(fr))
-    for i in range(3):
+            ring(d, left_cx, base_y + ph // 2 + lift, 24 + i * 16, (*tint, 200), 2)
+            ring(d, left_cx, base_y + ph // 2 + lift, 12 + i * 8, (255, 255, 255, 180), 2)
+        timeline.append(stamp(fr, "空间门打开…"))
+
+    for i in range(4):
         fr = make_bg()
+        place_pads(fr)
         d = ImageDraw.Draw(fr)
-        cx, cy = left_x + pw // 2 + 40, base_y + ph // 2 - 24
-        r = 18 + i * 30
-        ring(d, cx, cy, r, (255, 255, 255, 200 - i * 45), 3)
-        ring(d, cx, cy, max(8, r // 2), (*tint, 230), 2)
-        for a in range(8):
-            ang = a * math.pi / 4 + i * 0.35
-            sx = cx + int(math.cos(ang) * (36 + i * 22))
-            sy = cy + int(math.sin(ang) * (36 + i * 22))
+        r = 20 + i * 26
+        ring(d, left_cx, base_y + ph // 2 - 20, r, (255, 255, 255, 210 - i * 40), 3)
+        ring(d, left_cx, base_y + ph // 2 - 20, max(6, r // 2), (*tint, 230), 2)
+        for a in range(10):
+            ang = a * math.pi / 5 + i * 0.4
+            sx = left_cx + int(math.cos(ang) * (30 + i * 24))
+            sy = base_y + ph // 2 - 20 + int(math.sin(ang) * (30 + i * 24))
             d.ellipse([sx - 2, sy - 2, sx + 2, sy + 2], fill=(255, 255, 255, 230))
         if i == 0:
             after = jump[-1].copy()
-            after.putalpha(after.split()[-1].point(lambda a: int(a * 0.4)))
-            fr.alpha_composite(after, (left_x + 44, base_y - 44))
-        timeline.append(stamp(fr))
+            after.putalpha(after.split()[-1].point(lambda a: int(a * 0.35)))
+            fr.alpha_composite(after, (left_x, base_y - 50))
+        timeline.append(stamp(fr, "咻——离开起点"))
+
+    for i in range(6):
+        fr = make_bg()
+        place_pads(fr)
+        d = ImageDraw.Draw(fr)
+        t = i / 5.0
+        cx = int(left_cx + (right_cx - left_cx) * t)
+        cy = base_y + ph // 2 - 10 - int(math.sin(t * math.pi) * 40)
+        for k in range(8):
+            bx = cx - k * 14
+            ba = 200 - k * 22
+            if ba > 0:
+                d.ellipse([bx - 6, cy - 4, bx + 6, cy + 4], fill=(*tint, ba))
+        ring(d, cx, cy, 16, (255, 255, 255, 200), 2)
+        if 0.15 < t < 0.85:
+            ghost = idle[0].copy()
+            ghost.putalpha(ghost.split()[-1].point(lambda a: int(a * 0.18)))
+            fr.alpha_composite(ghost, (cx - pw // 2, cy - ph // 2))
+        timeline.append(stamp(fr, f"穿越空间  {i + 1}/6"))
+
     for i in range(3):
         fr = make_bg()
+        place_pads(fr)
         d = ImageDraw.Draw(fr)
-        for t in range(6):
-            x = left_x + 90 + i * 55 + t * 32
-            y = base_y + ph // 2 - 8 + (t % 2) * 8
-            d.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(*tint, 170 - t * 18))
-        timeline.append(stamp(fr))
-    for i, jf in enumerate(jump):
+        r = 70 - i * 18
+        ring(d, right_cx, base_y + ph // 2, r, (255, 255, 255, 200 - i * 30), 3)
+        ring(d, right_cx, base_y + ph // 2, max(10, r // 2), (*tint, 220), 2)
+        if i >= 1:
+            alpha = jump[min(i, len(jump) - 1)].copy()
+            alpha.putalpha(alpha.split()[-1].point(lambda a: int(a * (0.45 + i * 0.2))))
+            fr.alpha_composite(alpha, (right_x, base_y - 40 + i * 12))
+        timeline.append(stamp(fr, "抵达终点！"))
+
+    for i in range(6):
         fr = make_bg()
-        if i < 2:
-            d = ImageDraw.Draw(fr)
-            ring(d, right_x + pw // 2, base_y + ph // 2, 72 - i * 22, (255, 255, 255, 190), 3)
-            ring(d, right_x + pw // 2, base_y + ph // 2, 42 - i * 12, (*tint, 210), 2)
-        alpha = jf.copy()
-        if i == 0:
-            alpha.putalpha(alpha.split()[-1].point(lambda a: int(a * 0.75)))
-        fr.alpha_composite(alpha, (right_x, base_y - 28 + i * 8))
-        timeline.append(stamp(fr))
-    for i in range(4):
-        fr = make_bg()
-        fr.alpha_composite(idle[i % len(idle)], (right_x, base_y + [0, -3, -5, -2][i]))
-        timeline.append(stamp(fr))
+        place_pads(fr)
+        fr.alpha_composite(
+            idle[i % len(idle)], (right_x, base_y + [0, -2, -4, -2, 0, -1][i])
+        )
+        d = ImageDraw.Draw(fr)
+        ring(d, right_cx, foot_y + 6, 22, (*tint, 120), 2)
+        timeline.append(stamp(fr, "到另一个地点啦"))
 
     n = len(timeline)
-    durations = [
-        130 if (i < 4 or i >= n - 4) else (75 if 9 <= i <= 14 else 95)
-        for i in range(n)
-    ]
+    durations = []
+    for i in range(n):
+        if i < 5:
+            durations.append(110)
+        elif i < 10:
+            durations.append(90)
+        elif i < 14:
+            durations.append(70)
+        elif i < 20:
+            durations.append(65)
+        elif i < 23:
+            durations.append(85)
+        else:
+            durations.append(120)
+
     gifs = [
         fr.convert("RGB").quantize(colors=230, method=Image.Quantize.MEDIANCUT)
         for fr in timeline
