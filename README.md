@@ -17,11 +17,15 @@
 </p>
 
 <p align="center">
+  <a href="https://virtualpet.beer"><strong>官网 virtualpet.beer</strong></a>
+  ·
   <a href="https://github.com/zhaizhch/fluffnest/releases/latest"><strong>⬇ 立刻下载最新版</strong></a>
   ·
   <a href="./docs/用户安装指南.md">安装指南</a>
   ·
   <a href="./LICENSE">许可（禁止商用）</a>
+  ·
+  <a href="./docs/support.md">请杯奶茶</a>
   ·
   <a href="https://github.com/zhaizhch/fluffnest/issues">反馈问题</a>
 </p>
@@ -180,3 +184,21 @@ npx tsx scripts/verify-bond-collect.ts
 - 完整条款：[LICENSE](./LICENSE)
 
 如需商业授权，请通过 GitHub Issue / 仓库维护者联系。
+
+---
+
+## 请杯奶茶 / Support
+
+个人维护不易。自愿打赏不是购买，也不影响你免费使用。
+
+- 官网打赏页：https://virtualpet.beer/#support
+- 说明与二维码：[docs/support.md](./docs/support.md)
+- 海外：优先 [GitHub Sponsors](https://github.com/sponsors/zhaizhch)
+
+<p align="center">
+  <img src="docs/assets/qr-wechat.png" alt="微信收款码" width="180" />
+  &nbsp;&nbsp;
+  <img src="docs/assets/qr-alipay.png" alt="支付宝收款码" width="180" />
+</p>
+
+<p align="center"><sub>微信 · 支付宝（扫码打赏）</sub></p>

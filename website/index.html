@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>绒窝 FluffNest · 桌边有个软软的小窝</title>
+  <meta name="description" content="绒窝 FluffNest — macOS 萌系桌面宠物。多宠图鉴、点击互动、喝水提醒。个人免费下载，禁止商用。官网 virtualpet.beer" />
+  <meta property="og:title" content="绒窝 FluffNest" />
+  <meta property="og:description" content="桌边有个软软的小窝 — macOS 桌面宠物" />
+  <meta property="og:image" content="/assets/social.png" />
+  <meta property="og:url" content="https://virtualpet.beer/" />
+  <link rel="icon" href="/assets/social.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header class="top">
+    <a class="logo" href="/">绒窝 <span>FluffNest</span></a>
+    <nav>
+      <a href="#demo">演示</a>
+      <a href="#features">功能</a>
+      <a href="#install">安装</a>
+      <a href="#support">支持</a>
+      <a href="#license">许可</a>
+      <a class="nav-gh" href="https://github.com/zhaizhch/fluffnest" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">macOS 桌面宠物 · virtualpet.beer</p>
+        <h1>绒窝</h1>
+        <p class="slogan">桌边有个软软的小窝</p>
+        <p class="lead">
+          一只常驻桌角的萌系伙伴：会眨眼、会蹦跳、点一点就有对话。
+          图鉴收集、喝水提醒、金币解锁更多宠物——轻陪伴，不打扰。
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/zhaizhch/fluffnest/releases/latest" target="_blank" rel="noopener">下载最新版</a>
+          <a class="btn ghost" href="https://github.com/zhaizhch/fluffnest" target="_blank" rel="noopener">查看源码</a>
+        </div>
+        <p class="fine">仅限 macOS 12+ · 个人免费 · <strong>禁止商用</strong></p>
+      </div>
+      <div class="hero-visual">
+        <img src="/assets/demo.gif" alt="绒窝多宠桌面演示动图" width="720" height="405" />
+      </div>
+    </section>
+
+    <section id="demo" class="section">
+      <h2>技能演示</h2>
+      <p class="section-lead">真实精灵动作，不只是海报。扫帚魔女与暖卡卡的空间跳跃：从起点 A 闪到终点 B。</p>
+      <div class="demo-grid">
+        <figure>
+          <img src="/assets/demo-broomwitch-warp.gif" alt="扫帚魔女空间跳跃" loading="lazy" />
+          <figcaption>扫帚魔女 · 空间跳跃</figcaption>
+        </figure>
+        <figure>
+          <img src="/assets/demo-kaka5-warp.gif" alt="暖卡卡空间跳跃" loading="lazy" />
+          <figcaption>暖卡卡 · 空间跳跃</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="features" class="section features">
+      <h2>她能做什么</h2>
+      <p class="section-lead">把「摸鱼陪伴」和轻度养成收进桌角，不占你的工作流。</p>
+      <div class="feature-list">
+        <article>
+          <h3>桌面常驻</h3>
+          <p>透明置顶窗口，托盘一键显示 / 隐藏。拖到哪，窝就在哪。</p>
+        </article>
+        <article>
+          <h3>多宠图鉴</h3>
+          <p>毛绒、人型、偶像、数码、奇幻、卡卡……分类收集，半收录 / 集齐徽章一目了然。</p>
+        </article>
+        <article>
+          <h3>点击互动</h3>
+          <p>单击随机动作与气泡对话；亲密度分档，关系升温才更黏人。</p>
+        </article>
+        <article>
+          <h3>养成节奏</h3>
+          <p>互动耗体力、闲置慢慢回；每日好感有上限；登录礼需手动领取。</p>
+        </article>
+        <article>
+          <h3>温和提醒</h3>
+          <p>喝水、久坐、手动会议提醒；打卡得金币，再去小铺解锁新伙伴。</p>
+        </article>
+        <article>
+          <h3>与 GitHub 互通</h3>
+          <p>安装包、源码、Issue 反馈都在同一仓库。官网只做展示与导流，版本以 Releases 为准。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="install" class="section install">
+      <h2>三步装上 Mac</h2>
+      <ol class="steps">
+        <li>
+          <strong>选对芯片</strong>
+          <p>终端执行 <code>uname -m</code>：<code>arm64</code> 下 aarch64 包，<code>x86_64</code> 下 Intel 包。</p>
+        </li>
+        <li>
+          <strong>拖进应用程序</strong>
+          <p>打开 DMG，把 FluffNest 拖到「应用程序」。</p>
+        </li>
+        <li>
+          <strong>若提示无法打开</strong>
+          <p>右键 → 打开；或执行 <code>xattr -cr /Applications/FluffNest.app</code></p>
+        </li>
+      </ol>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/zhaizhch/fluffnest/releases/latest" target="_blank" rel="noopener">去 GitHub 下载</a>
+        <a class="btn ghost" href="https://github.com/zhaizhch/fluffnest/blob/main/docs/%E7%94%A8%E6%88%B7%E5%AE%89%E8%A3%85%E6%8C%87%E5%8D%97.md" target="_blank" rel="noopener">完整安装指南</a>
+      </div>
+    </section>
+
+    <section class="section github-bridge">
+      <h2>官网 ↔ GitHub</h2>
+      <p class="section-lead">本站域名 <strong>virtualpet.beer</strong> 是产品主页；工程与发版仍在 GitHub。</p>
+      <ul class="links">
+        <li><a href="https://github.com/zhaizhch/fluffnest" target="_blank" rel="noopener">仓库主页 · 源码与 README</a></li>
+        <li><a href="https://github.com/zhaizhch/fluffnest/releases/latest" target="_blank" rel="noopener">Releases · 安装包下载</a></li>
+        <li><a href="https://github.com/zhaizhch/fluffnest/issues" target="_blank" rel="noopener">Issues · 反馈与建议</a></li>
+        <li><a href="https://github.com/zhaizhch/fluffnest/blob/main/LICENSE" target="_blank" rel="noopener">LICENSE · 使用条款</a></li>
+      </ul>
+    </section>
+
+    <section id="support" class="section support">
+      <h2>请杯奶茶</h2>
+      <p class="section-lead">
+        绒窝个人免费、禁止商用。若喜欢这只桌角小窝，自愿打赏即可——不是购买，不影响下载与使用。
+      </p>
+      <div class="tip-grid">
+        <figure class="tip-frame tip-wechat">
+          <div class="tip-mat">
+            <img src="/assets/qr-wechat.png" alt="微信收款二维码" width="280" height="280" loading="lazy" />
+          </div>
+          <figcaption>微信</figcaption>
+        </figure>
+        <figure class="tip-frame tip-alipay">
+          <div class="tip-mat">
+            <img src="/assets/qr-alipay.png" alt="支付宝收款二维码" width="280" height="280" loading="lazy" />
+          </div>
+          <figcaption>支付宝</figcaption>
+        </figure>
+      </div>
+      <div class="tip-overseas">
+        <h3>海外 / International</h3>
+        <p>Card &amp; overseas-friendly options:</p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/sponsors/zhaizhch" target="_blank" rel="noopener">GitHub Sponsors</a>
+          <a class="btn ghost" href="https://github.com/zhaizhch/fluffnest" target="_blank" rel="noopener">Star on GitHub</a>
+        </div>
+        <p class="fine">GitHub Sponsors appears after the maintainer enables it. WeChat / Alipay QR above work for users in China.</p>
+      </div>
+    </section>
+
+    <section id="license" class="section license">
+      <h2>下载许可</h2>
+      <p>
+        绒窝 FluffNest 提供<strong>个人免费下载与体验</strong>。
+        <strong>禁止任何商业用途</strong>（售卖、收费分发、广告变现、商业产品内嵌等）。
+        精灵图集等美术资源亦不可商用。
+      </p>
+      <p><a href="https://github.com/zhaizhch/fluffnest/blob/main/LICENSE" target="_blank" rel="noopener">阅读完整 LICENSE →</a></p>
+    </section>
+  </main>
+
+  <footer>
+    <p>绒窝 FluffNest · <a href="https://virtualpet.beer">virtualpet.beer</a></p>
+    <p>
+      <a href="https://github.com/zhaizhch/fluffnest" target="_blank" rel="noopener">GitHub</a>
+      ·
+      <a href="#support">请杯奶茶</a>
+      · 个人免费 · 禁止商用
+    </p>
+  </footer>
+
+  <script src="/main.js"></script>
+</body>
+</html>
