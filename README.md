@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://virtualpet.beer"><strong>官网 virtualpet.beer</strong></a>
   ·
-  <a href="https://cdn.jsdelivr.net/gh/zhaizhch/fluffnest@main/docs/web-demo/"><strong>网页试玩（暖卡卡）</strong></a>
+  <a href="https://zhaizhch.github.io/fluffnest/"><strong>网页试玩（暖卡卡）</strong></a>
   ·
   <a href="https://github.com/zhaizhch/fluffnest/releases/latest"><strong>⬇ 立刻下载最新版</strong></a>
   ·
@@ -155,14 +155,14 @@ npm run demo:build           # 输出到 website/try + website/pets
 ```
 
 网页试玩（暖卡卡，无需 Key）：
-- GitHub / CDN：https://cdn.jsdelivr.net/gh/zhaizhch/fluffnest@main/docs/web-demo/
-- GitHub Pages：https://zhaizhch.github.io/fluffnest/ （若自定义域名缓存未清，优先用上面 CDN）
+- GitHub Pages：https://zhaizhch.github.io/fluffnest/
+- 源码目录：`docs/web-demo/`
 - 官网嵌入：https://virtualpet.beer/
 
 博客可 iframe：
 
 ```html
-<iframe src="https://cdn.jsdelivr.net/gh/zhaizhch/fluffnest@main/docs/web-demo/?embed=1" width="320" height="520" style="border:0;background:transparent;max-width:100%" loading="lazy" title="绒窝试玩"></iframe>
+<iframe src="https://zhaizhch.github.io/fluffnest/?embed=1" width="320" height="520" style="border:0;background:transparent;max-width:100%" loading="lazy" title="绒窝试玩"></iframe>
 ```
 
 推送 `v*` tag 后，Actions 会构建 aarch64 + x86_64 并写入 Release。
