@@ -1,3 +1,5 @@
+import type { Personality } from "./types";
+
 /** Pet roster — each entry is a unique named pet, grouped by category. */
 
 export type PetCategoryId =
@@ -12,7 +14,7 @@ export type PetDef = {
   id: string;
   name: string;
   category: PetCategoryId;
-  personality: "calm" | "lively" | "clingy";
+  personality: Personality;
   /** Codex atlas path; omit when render is apng/svg */
   sprite?: string;
   spriteVersion?: number;

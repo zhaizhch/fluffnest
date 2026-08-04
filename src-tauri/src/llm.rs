@@ -24,11 +24,21 @@ pub struct PetSaysPayload {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub behavior: Option<String>,
+    /// Optional structured detail (e.g. weather number card).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TextResponse {
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WeatherBubbleResponse {
+    text: String,
+    #[serde(default)]
+    summary: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,9 +124,61 @@ pub fn fetch_weather_summary(city: &str) -> Result<String, String> {
     Ok(resp.text)
 }
 
-pub fn fetch_hot_headline() -> Result<String, String> {
-    let body = json!({});
-    let resp: TextResponse = go_bridge::post_json("/v1/news", &body)?;
+/// One round-trip: weather numbers + instant personality tip (no LLM wait).
+pub fn generate_weather_bubble(
+    llm: &LlmSettings,
+    pet: &PetInstance,
+) -> Result<(String, String), String> {
+    let body = json!({
+        "llm": llm,
+        "pet": pet,
+        "city": llm.weather_city,
+    });
+    let resp: WeatherBubbleResponse = go_bridge::post_json("/v1/weather-bubble", &body)?;
+    let summary = if resp.summary.trim().is_empty() {
+        resp.text.clone()
+    } else {
+        resp.summary
+    };
+    Ok((resp.text, summary))
+}
+
+/// Background LLM polish for weather tip.
+pub fn refine_weather_tip(llm: &LlmSettings, pet: &PetInstance) -> Result<String, String> {
+    let body = json!({
+        "llm": llm,
+        "pet": pet,
+        "city": llm.weather_city,
+    });
+    let resp: TextResponse = go_bridge::post_json("/v1/weather-tip", &body)?;
+    Ok(resp.text)
+}
+
+/// News headlines + instant personality tip (no LLM wait).
+pub fn generate_news_bubble(
+    llm: &LlmSettings,
+    pet: &PetInstance,
+) -> Result<(String, String), String> {
+    let body = json!({
+        "llm": llm,
+        "pet": pet,
+    });
+    let resp: WeatherBubbleResponse = go_bridge::post_json("/v1/news", &body)?;
+    let summary = if resp.summary.trim().is_empty() {
+        resp.text.clone()
+    } else {
+        resp.summary
+    };
+    Ok((resp.text, summary))
+}
+
+/// Background LLM polish for news tip.
+pub fn refine_news_tip(llm: &LlmSettings, pet: &PetInstance) -> Result<String, String> {
+    let body = json!({
+        "llm": llm,
+        "pet": pet,
+    });
+    let resp: TextResponse = go_bridge::post_json("/v1/news-tip", &body)?;
     Ok(resp.text)
 }
 

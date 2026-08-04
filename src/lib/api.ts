@@ -24,6 +24,11 @@ export const api = {
   interact: (action: InteractAction) =>
     invoke<PetInstance>("interact", { action }),
   switchPet: (petId: string) => invoke<PetInstance>("switch_pet", { petId }),
+  setPetPersonality: (personality: string, petId?: string | null) =>
+    invoke<PetInstance>("set_pet_personality", {
+      personality,
+      petId: petId ?? null,
+    }),
   updateSettings: (settings: Settings) =>
     invoke<Settings>("update_settings", { settings }),
   upsertReminder: (reminder: ReminderRule) =>

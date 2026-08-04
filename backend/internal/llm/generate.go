@@ -18,6 +18,10 @@ func personalityBlurb(p string) string {
 		return "性格活泼开朗，爱开玩笑和用轻快语气词；容易兴奋，喜欢逗主人开心。"
 	case "clingy":
 		return "性格黏人撒娇，很依赖主人；会求贴贴、吃醋式关心，语气软软的。"
+	case "tsundere":
+		return "性格傲娇：嘴上别扭、口是心非，其实很在意主人；常用别扭关心、嘴硬心软的说法，绝不过分冷漠。"
+	case "clever":
+		return "性格机灵：反应快、爱俏皮吐槽和机智提醒；聪明但不摆架子，像会说俏皮话的小参谋。"
 	default:
 		return "性格温和，像一只软软的桌面小伙伴。"
 	}
@@ -78,24 +82,53 @@ func (c *Client) GenerateBubble(ctx context.Context, llm types.LlmSettings, pet 
 	case "care_voice":
 		task = fmt.Sprintf("你正在边跳舞边提醒主人「%s」。请用「%s」性格说一句很口语、适合朗读的提醒（不超过 26 字）。可撒娇/俏皮/温柔，不要像播报。只输出这一句。", action, pet.Personality)
 	case "weather":
-		task = fmt.Sprintf("根据天气信息，用「%s」性格说一句关心主人的话（不超过 32 字）。天气：%s\n只输出这一句。", pet.Personality, extraVal)
+		var style string
+		switch pet.Personality {
+		case "lively":
+			style = "活泼俏皮，可带轻快语气词，像分享出门小攻略"
+		case "clingy":
+			style = "软软撒娇叮嘱，像黏着主人催着穿好衣服"
+		case "calm":
+			style = "温柔克制，像轻声递上一条实用提醒"
+		case "tsundere":
+			style = "嘴硬心软，别扭地提醒主人注意天气，别太直白温柔"
+		case "clever":
+			style = "机灵俏皮，用聪明小建议把防护说清楚"
+		default:
+			style = "温和口语，像桌面小伙伴关心主人"
+		}
+		task = fmt.Sprintf(
+			"下面是实时天气（含数字与防护素材）。用「%s」性格（%s）对主人说一段出门关心话。\n"+
+				"要求：点出气温、天气（晴/雨/多云等）、风速、紫外线（若有）；再给 1 条具体防护（防晒/带伞/保暖/补水等）。"+
+				"第一人称口语，不要列表；约 60～110 字。\n天气：\n%s\n只输出这段话。",
+			pet.Personality, style, extraVal,
+		)
 	case "joke":
 		task = fmt.Sprintf("用「%s」性格讲一句适合桌宠说的冷笑话或小俏皮话（不超过 32 字）。只输出笑话本身。", pet.Personality)
 	case "news":
-		task = fmt.Sprintf("下面是一条科技或娱乐圈新闻（国内外都有可能）。用「%s」性格缩成一句轻松吐槽（不超过 32 字，不要吓人、不要政治）：\n%s\n只输出这一句。", pet.Personality, extraVal)
+		task = fmt.Sprintf("下面是刚查到的科技/娱乐实时新闻（可能有多条）。请挑一条，用「%s」性格缩成一句轻松吐槽（不超过 32 字，不要吓人、不要政治，不要罗列多条）：\n%s\n只输出这一句。", pet.Personality, extraVal)
 	case "fortune_teaser":
 		task = fmt.Sprintf("你刚给主人讲完今日运势。用「%s」性格再补一句很短的鼓励或俏皮收尾（不超过 28 字）。只输出这一句。", pet.Personality)
 	default:
 		task = fmt.Sprintf("用「%s」性格说一句很短的话（不超过 28 字），情境：%s。只输出这一句。", pet.Personality, action)
 	}
+	opts := BubbleOpts()
+	maxChars := MaxBubbleChars
+	if kind == "weather" {
+		opts = WeatherOpts()
+		maxChars = MaxWeatherChars
+	}
 	raw, err := c.ChatCompletion(ctx, llm, []map[string]string{
 		msg("system", SystemPrompt(pet)),
-		msg("user", task+"\n（直接输出最终一句话，不要思考过程）"),
-	}, BubbleOpts())
+		msg("user", task+"\n（直接输出最终内容，不要思考过程）"),
+	}, opts)
 	if err != nil {
 		return "", err
 	}
-	return CleanLine(raw, MaxBubbleChars), nil
+	if kind == "weather" {
+		return CleanWeatherLine(raw, maxChars), nil
+	}
+	return CleanLine(raw, maxChars), nil
 }
 
 func (c *Client) GenerateChat(ctx context.Context, llm types.LlmSettings, pet types.PetInstance, history []types.ChatMessage, userMessage string) (string, error) {
@@ -137,6 +170,10 @@ func (c *Client) GenerateFortune(ctx context.Context, llm types.LlmSettings, pet
 		style = "软软撒娇，像黏着主人叮嘱今天要注意什么"
 	case "calm":
 		style = "温柔克制，像轻轻递上一杯茶时说的话"
+	case "tsundere":
+		style = "傲娇口吻：嘴上说才不是特意关心，但运势叮嘱很到位"
+	case "clever":
+		style = "机灵参谋风：把运势讲清楚，再丢一句俏皮点评"
 	default:
 		style = "温和口语，像桌面小伙伴陪主人看运势"
 	}
@@ -190,6 +227,10 @@ func (c *Client) GenerateCareVoice(ctx context.Context, llm types.LlmSettings, p
 		style = "黏人撒娇，软软的，求关注式提醒"
 	case "calm":
 		style = "温柔克制，轻声提醒，不催促"
+	case "tsundere":
+		style = "傲娇提醒：别扭、嘴硬，但内容是真心催主人喝水/活动"
+	case "clever":
+		style = "机灵俏皮，用聪明比喻提醒，不啰嗦"
 	default:
 		style = "温和口语"
 	}

@@ -39,7 +39,7 @@ html.pet-window #root {
 }
 
 .bubble {
-  max-width: 160px;
+  max-width: 260px;
   margin-bottom: 6px;
   padding: 8px 12px;
   border-radius: 14px 14px 14px 4px;
@@ -47,12 +47,13 @@ html.pet-window #root {
   color: var(--ink, #333);
   font-size: 12px;
   letter-spacing: 0.03em;
-  line-height: 1.35;
+  line-height: 1.4;
   box-shadow: 0 8px 22px rgba(30, 20, 10, 0.14);
   border: 1px solid rgba(60, 45, 30, 0.08);
   animation: pop 0.28s ease;
   pointer-events: none;
   z-index: 5;
+  word-break: break-word;
 }
 
 @keyframes pop {
@@ -524,6 +525,28 @@ html.pet-window #root {
 .fortune-card-body::-webkit-scrollbar-thumb {
   background: rgba(90, 70, 50, 0.2);
   border-radius: 999px;
+}
+
+.weather-stats {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(90, 70, 50, 0.08);
+  color: #2f281f;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  letter-spacing: 0.01em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.weather-tip {
+  margin: 10px 2px 0;
+  color: #5a463c;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .quick-menu-actions {

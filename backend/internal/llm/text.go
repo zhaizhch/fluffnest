@@ -45,6 +45,17 @@ func CleanLine(raw string, max int) string {
 	return TruncateChars(t, max)
 }
 
+// CleanWeatherLine keeps short multi-sentence weather advice (allows newlines → spaces).
+func CleanWeatherLine(raw string, max int) string {
+	t := strings.TrimSpace(StripThinking(raw))
+	t = strings.ReplaceAll(t, "\r\n", "\n")
+	t = strings.Join(strings.Fields(strings.ReplaceAll(t, "\n", " ")), " ")
+	for _, wrap := range []string{`"`, `'`, "「", "」", "“", "”"} {
+		t = strings.Trim(t, wrap)
+	}
+	return TruncateChars(t, max)
+}
+
 func CleanFortune(raw string) string {
 	t := strings.TrimSpace(StripThinking(raw))
 	if strings.HasPrefix(t, "```") {

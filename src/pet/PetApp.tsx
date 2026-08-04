@@ -52,6 +52,8 @@ import "./pet.css";
 const PET_SIZE = { w: 260, h: 320 };
 const MENU_SIZE = { w: 520, h: 400 };
 const FORTUNE_SIZE = { w: 540, h: 460 };
+const WEATHER_SIZE = { w: 540, h: 440 };
+const NEWS_SIZE = { w: 540, h: 460 };
 
 function pickBubble(_speciesId: string, behavior: PetBehavior): string | null {
   const cat = getCatalogAction(behavior);
@@ -79,6 +81,12 @@ export function PetApp() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuBusy, setMenuBusy] = useState(false);
   const [fortuneText, setFortuneText] = useState<string | null>(null);
+  const [infoCard, setInfoCard] = useState<{
+    kind: "weather" | "news";
+    title: string;
+    summary: string;
+    tip: string;
+  } | null>(null);
   const [careAlert, setCareAlert] = useState<CareAlertPlan | null>(null);
   const [dancePose, setDancePose] = useState<DancePose | null>(null);
   const dragRef = useRef(false);
@@ -113,9 +121,10 @@ export function PetApp() {
   const startCareAlert = useCallback((kind: "water" | "stretch", spokenHint?: string) => {
     if (careAlertRef.current) return;
 
-    // Close quick menu / fortune if open (size restored by roam restore path)
+    // Close quick menu / fortune / weather if open (size restored by roam restore path)
     setMenuOpen(false);
     setFortuneText(null);
+    setInfoCard(null);
 
     const speciesId = petRef.current?.speciesId ?? "mochi";
     const petName = petRef.current?.name ?? "绒窝";
@@ -420,6 +429,7 @@ export function PetApp() {
 
       if (payload.kind === "fortune") {
         setMenuOpen(false);
+        setInfoCard(null);
         setFortuneText(payload.text);
         void getCurrentWindow()
           .setSize(new LogicalSize(FORTUNE_SIZE.w, FORTUNE_SIZE.h))
@@ -442,6 +452,42 @@ export function PetApp() {
               durationMs: 2200,
               bubbleChance: 0,
             },
+            { behavior: "idle", durationMs: 800, bubbleChance: 0 },
+          ],
+          species,
+          { userInitiated: true, skipLlm: true },
+        );
+        return;
+      }
+
+      if (payload.kind === "weather" || payload.kind === "news") {
+        const isWeather = payload.kind === "weather";
+        setMenuOpen(false);
+        setFortuneText(null);
+        setInfoCard({
+          kind: isWeather ? "weather" : "news",
+          title: isWeather ? "实时天气" : "科技娱乐资讯",
+          summary: (payload.detail || payload.text || "").trim(),
+          tip: payload.text,
+        });
+        const size = isWeather ? WEATHER_SIZE : NEWS_SIZE;
+        void getCurrentWindow()
+          .setSize(new LogicalSize(size.w, size.h))
+          .catch(() => undefined);
+        showBubble(isWeather ? "天气查好啦～" : "资讯来啦～", 2800);
+        if (species === "rising") {
+          void runRisingSteps(
+            [
+              { action: "Hello", durationMs: 2000 },
+              { action: "Stand", durationMs: 1600 },
+            ],
+            { userInitiated: true },
+          );
+          return;
+        }
+        void runSequence(
+          [
+            { behavior: b, durationMs: 2200, bubbleChance: 0 },
             { behavior: "idle", durationMs: 800, bubbleChance: 0 },
           ],
           species,
@@ -591,6 +637,16 @@ export function PetApp() {
       listen<PetSaysPayload>("pet-says", (e) => {
         playPetSaysRef.current(e.payload);
       }),
+      listen<{ kind: string; tip: string }>("info-card-tip", (e) => {
+        const { kind, tip } = e.payload;
+        if (!tip?.trim()) return;
+        setInfoCard((card) =>
+          card && card.kind === kind ? { ...card, tip: tip.trim() } : card,
+        );
+        if (kind === "weather" || kind === "news") {
+          showBubble(tip.trim(), 3600);
+        }
+      }),
     ];
     return () => {
       unsubs.forEach((p) => p.then((u) => u()));
@@ -687,7 +743,7 @@ export function PetApp() {
             nextSoftAt = Date.now() + nextRisingActionDelayMs();
           } else {
             await runSequenceRef.current(
-              buildSoftIdleAction(active.speciesId, active.bond),
+              buildSoftIdleAction(active.speciesId, active.bond, active.personality),
               active.speciesId,
             );
             nextSoftAt = Date.now() + nextSoftActionDelayMs();
@@ -859,6 +915,7 @@ export function PetApp() {
   const openPanel = useCallback(() => {
     setMenuOpen(false);
     setFortuneText(null);
+    setInfoCard(null);
     void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
     WebviewWindow.getByLabel("panel").then((w) => {
       w?.show();
@@ -868,10 +925,10 @@ export function PetApp() {
 
   const closeMenu = useCallback(() => {
     setMenuOpen(false);
-    if (!fortuneText) {
+    if (!fortuneText && !infoCard) {
       void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
     }
-  }, [fortuneText, setPetWindowSize]);
+  }, [fortuneText, infoCard, setPetWindowSize]);
 
   const closeFortune = useCallback(() => {
     setFortuneText(null);
@@ -879,22 +936,30 @@ export function PetApp() {
     void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
   }, [setPetWindowSize]);
 
+  const closeInfoCard = useCallback(() => {
+    setInfoCard(null);
+    setMenuOpen(false);
+    void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
+  }, [setPetWindowSize]);
+
   const openMenu = useCallback(() => {
     setFortuneText(null);
+    setInfoCard(null);
     setMenuOpen(true);
     void setPetWindowSize(MENU_SIZE.w, MENU_SIZE.h);
   }, [setPetWindowSize]);
 
   useEffect(() => {
-    if (!menuOpen && !fortuneText) return;
+    if (!menuOpen && !fortuneText && !infoCard) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (fortuneText) closeFortune();
+      else if (infoCard) closeInfoCard();
       else closeMenu();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [menuOpen, fortuneText, closeMenu, closeFortune]);
+  }, [menuOpen, fortuneText, infoCard, closeMenu, closeFortune, closeInfoCard]);
 
   const runQuickAction = useCallback(
     async (kind: "joke" | "news" | "weather" | "fortune") => {
@@ -910,14 +975,14 @@ export function PetApp() {
           : kind === "joke"
             ? "我想想笑话…"
             : kind === "news"
-              ? "翻翻科技娱乐…"
+              ? "查实时科技娱乐…"
               : "看看天气…";
-      showBubble(thinking, 2400);
+      showBubble(thinking, 60000);
       try {
         await api.triggerProactive(kind);
         setMenuOpen(false);
-        // fortune keeps the enlarged window via playPetSays
-        if (kind !== "fortune") {
+        // fortune / weather / news keep the enlarged window via playPetSays
+        if (kind !== "fortune" && kind !== "weather" && kind !== "news") {
           void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
         }
       } catch (err) {
@@ -1026,7 +1091,7 @@ export function PetApp() {
 
   return (
     <div
-      className={`pet-root species-${species} behavior-${visual} action-${behavior} face-${facing}${menuOpen ? " menu-open" : ""}${fortuneText ? " fortune-open" : ""}${careAlert ? " care-alerting care-dancing" : ""}${dancePose ? ` care-pose-${dancePose}` : ""}`}
+      className={`pet-root species-${species} behavior-${visual} action-${behavior} face-${facing}${menuOpen ? " menu-open" : ""}${fortuneText || infoCard ? " fortune-open" : ""}${careAlert ? " care-alerting care-dancing" : ""}${dancePose ? ` care-pose-${dancePose}` : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -1052,6 +1117,7 @@ export function PetApp() {
           clearRisingActionSoon(1400);
         }
         if (fortuneText) closeFortune();
+        else if (infoCard) closeInfoCard();
         else if (menuOpen) closeMenu();
         else openMenu();
       }}
@@ -1158,6 +1224,37 @@ export function PetApp() {
             </button>
           </header>
           <div className="fortune-card-body">{fortuneText}</div>
+        </aside>
+      )}
+      {infoCard && (
+        <aside
+          className={`fortune-card ${infoCard.kind === "weather" ? "weather-card" : "news-card"}`}
+          role="dialog"
+          aria-label={infoCard.title}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          <header className="fortune-card-head">
+            <span>{infoCard.title}</span>
+            <button
+              type="button"
+              className="quick-menu-close"
+              aria-label="关闭"
+              onClick={closeInfoCard}
+            >
+              ×
+            </button>
+          </header>
+          <div className="fortune-card-body">
+            <pre className="weather-stats">{infoCard.summary}</pre>
+            {infoCard.tip && infoCard.tip !== infoCard.summary ? (
+              <p className="weather-tip">{infoCard.tip}</p>
+            ) : null}
+          </div>
         </aside>
       )}
     </div>

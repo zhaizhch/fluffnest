@@ -356,6 +356,10 @@ button.primary {
   flex-wrap: wrap;
 }
 
+.personality-switch {
+  margin-bottom: 4px;
+}
+
 .row.wrap {
   flex-wrap: wrap;
 }

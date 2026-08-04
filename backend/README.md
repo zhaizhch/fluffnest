@@ -38,5 +38,6 @@ bash scripts/build-go-sidecar.sh
 | POST | `/v1/chat` | 面板对话 |
 | POST | `/v1/fortune` | 今日运势 |
 | POST | `/v1/care-voice` | 喝水/久坐台词批量 |
-| POST | `/v1/weather` | 天气摘要 |
-| POST | `/v1/news` | 科技/娱乐头条 |
+| POST | `/v1/weather` | 天气数字摘要 |
+| POST | `/v1/weather-bubble` | 天气摘要 + 性格化防护叮嘱（单次往返） |
+| POST | `/v1/news` | 新闻插件先拉实时资讯，再一轮吐槽 |

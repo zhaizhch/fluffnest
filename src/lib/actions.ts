@@ -253,6 +253,8 @@ const PERSONALITY_BIAS: Record<string, PetBehavior[]> = {
     "encore",
   ],
   clingy: ["look", "wave", "nuzzle", "bubble", "wiggle", "hum", "nod"],
+  tsundere: ["look", "nod", "wave", "spin", "phone", "cheer"],
+  clever: ["phone", "read", "magic", "cheer", "sparkle", "warp", "look"],
 };
 
 const CATEGORY_BASE_BIAS: Record<PetCategoryId, PetBehavior[]> = {
@@ -265,10 +267,13 @@ const CATEGORY_BASE_BIAS: Record<PetCategoryId, PetBehavior[]> = {
 };
 
 /** Weighted idle pool for a specific pet (includes exclusives). */
-export function idlePoolForPet(speciesId: string): PetBehavior[] {
+export function idlePoolForPet(
+  speciesId: string,
+  personalityOverride?: string,
+): PetBehavior[] {
   const def = petDef(speciesId);
   const category = def?.category ?? "fluff";
-  const personality = def?.personality ?? "calm";
+  const personality = personalityOverride ?? def?.personality ?? "calm";
 
   const pool: PetBehavior[] = BASE_ACTIONS.filter(
     (a) => a.id !== "react",

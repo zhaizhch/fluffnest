@@ -26,7 +26,20 @@ pub fn run() {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
             // Warm Go AI sidecar (LLM / weather / news) on a side thread.
-            std::thread::spawn(|| go_bridge::start());
+            let warm_city = {
+                let shared = app.state::<SharedState>();
+                shared
+                    .0
+                    .lock()
+                    .ok()
+                    .map(|g| g.settings.llm.weather_city.clone())
+                    .unwrap_or_else(|| "北京".into())
+            };
+            std::thread::spawn(move || {
+                go_bridge::start();
+                // Prefetch weather so the first click is usually cache-hit (<1s).
+                let _ = crate::llm::fetch_weather_summary(&warm_city);
+            });
 
             let show_pet = MenuItem::with_id(app, "show_pet", "显示宠物", true, None::<&str>)?;
             let hide_pet = MenuItem::with_id(app, "hide_pet", "隐藏宠物", true, None::<&str>)?;
@@ -105,6 +118,7 @@ pub fn run() {
             commands::get_active_pet,
             commands::interact,
             commands::switch_pet,
+            commands::set_pet_personality,
             commands::update_settings,
             commands::upsert_reminder,
             commands::add_meeting_reminder,

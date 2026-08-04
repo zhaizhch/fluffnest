@@ -28,6 +28,8 @@ fn voice_short_name(personality: &str) -> &'static str {
         "lively" => "XiaoyiNeural",
         "clingy" => "XiaoxiaoNeural",
         "calm" => "XiaohanNeural",
+        "tsundere" => "XiaoshuangNeural",
+        "clever" => "XiaoqiuNeural",
         _ => "XiaoxiaoNeural",
     }
 }

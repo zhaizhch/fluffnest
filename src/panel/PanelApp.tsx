@@ -15,6 +15,7 @@ import {
   petDef,
   type PetCategoryId,
 } from "../lib/petCatalog";
+import { PERSONALITIES, personalityLabel } from "../lib/personality";
 import type { AppState, ChatMessage, ReminderRule } from "../lib/types";
 import { PetFigure } from "../pet/PetFigure";
 import "./panel.css";
@@ -278,7 +279,7 @@ export function PanelApp() {
                   <span className="badge bond">
                     {bondProgress?.label ?? `亲密度 ${active.bond}`}
                   </span>
-                  <span className="badge">{active.personality}</span>
+                  <span className="badge">{personalityLabel(active.personality)}</span>
                 </p>
                 {bondProgress && (
                   <div className="bond-track" title="亲密度档位进度">
@@ -309,6 +310,31 @@ export function PanelApp() {
                 color="#b8a0c8"
                 display={`${state.dailyCare?.bondGained ?? 0}/${DAILY_BOND_CAP}`}
               />
+            </div>
+
+            <h3>性格切换</h3>
+            <p className="hint">每只宠物都可切换；对话、天气叮嘱、提醒语音都会跟着变。</p>
+            <div className="pet-switch personality-switch">
+              {PERSONALITIES.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  title={p.hint}
+                  className={active.personality === p.id ? "active-chip" : ""}
+                  onClick={async () => {
+                    if (active.personality === p.id) return;
+                    try {
+                      await api.setPetPersonality(p.id, active.id);
+                      await refresh();
+                      toast(`已切换为${p.label}`);
+                    } catch (e) {
+                      toast(String(e));
+                    }
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
             </div>
 
             <p className="hint coin-hint">{COIN_HINT}</p>
@@ -427,13 +453,7 @@ export function PanelApp() {
           <section className="card chat-card">
             <h2>和 {active.name} 聊天</h2>
             <p className="hint">
-              回复会按「
-              {active.personality === "calm"
-                ? "安静"
-                : active.personality === "lively"
-                  ? "活泼"
-                  : "黏人"}
-              」性格生成，并同步到桌面气泡。
+              回复会按「{personalityLabel(active.personality)}」性格生成，并同步到桌面气泡。
             </p>
             {!llmFromSettings(state.settings).enabled && (
               <p className="hint warn">请先在「设置」里开启 AI 并填写 API Key。</p>
@@ -1071,6 +1091,8 @@ export function PanelApp() {
                               setTab("status");
                               toast("今日运势已更新");
                               await refresh();
+                            } else if (kind === "weather" || kind === "news") {
+                              toast(payload.detail || payload.text);
                             } else {
                               toast(payload.text);
                             }

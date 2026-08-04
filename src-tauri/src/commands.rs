@@ -144,6 +144,51 @@ pub fn switch_pet(app: AppHandle, pet_id: String) -> Result<PetInstance, String>
     })
 }
 
+fn normalize_personality(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "calm" => Ok("calm"),
+        "lively" => Ok("lively"),
+        "clingy" => Ok("clingy"),
+        "tsundere" => Ok("tsundere"),
+        "clever" => Ok("clever"),
+        other => Err(format!("未知性格类型: {other}")),
+    }
+}
+
+/// Change the active (or specified) pet's personality. Every unlocked pet can switch.
+#[tauri::command]
+pub fn set_pet_personality(
+    app: AppHandle,
+    personality: String,
+    pet_id: Option<String>,
+) -> Result<PetInstance, String> {
+    let personality = normalize_personality(&personality)?.to_string();
+    with_state(&app, |state| {
+        let target_id = if let Some(id) = pet_id.filter(|s| !s.trim().is_empty()) {
+            id
+        } else {
+            state
+                .pets
+                .iter()
+                .find(|p| p.is_active)
+                .map(|p| p.id.clone())
+                .ok_or_else(|| "没有当前宠物".to_string())?
+        };
+        let pet = state
+            .pets
+            .iter_mut()
+            .find(|p| p.id == target_id)
+            .ok_or_else(|| "pet not found".to_string())?;
+        if !pet.unlocked {
+            return Err("宠物尚未解锁".into());
+        }
+        pet.personality = personality;
+        let snapshot = pet.clone();
+        let _ = app.emit("pet-updated", snapshot.clone());
+        Ok(snapshot)
+    })
+}
+
 #[tauri::command]
 pub fn update_settings(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     with_state(&app, |state| {
@@ -557,6 +602,7 @@ pub async fn chat_with_pet(
             text: reply,
             kind: "chat".into(),
             behavior: Some("wave".into()),
+            detail: None,
         },
     );
 
@@ -637,12 +683,11 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
     }
 
     let today = today_string();
+    let mut detail: Option<String> = None;
     let (text, behavior) = match kind {
         "weather" => {
-            let summary = crate::llm::fetch_weather_summary(&llm.weather_city)?;
-            let line =
-                crate::llm::generate_bubble_line(&llm, &pet, "weather", "天气", Some(&summary))
-                    .unwrap_or(summary);
+            let (line, summary) = crate::llm::generate_weather_bubble(&llm, &pet)?;
+            detail = Some(summary);
             (line, crate::llm::proactive_kind_behavior("weather"))
         }
         "joke" => {
@@ -650,9 +695,8 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
             (line, crate::llm::proactive_kind_behavior("joke"))
         }
         "news" => {
-            let headline = crate::llm::fetch_hot_headline()?;
-            let line =
-                crate::llm::generate_bubble_line(&llm, &pet, "news", "科技娱乐", Some(&headline))?;
+            let (line, summary) = crate::llm::generate_news_bubble(&llm, &pet)?;
+            detail = Some(summary);
             (line, crate::llm::proactive_kind_behavior("news"))
         }
         "fortune" => {
@@ -663,6 +707,7 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
                         text: cached,
                         kind: "fortune".into(),
                         behavior: Some(crate::llm::proactive_kind_behavior("fortune").into()),
+                        detail: None,
                     };
                     let _ = app.emit("pet-says", payload.clone());
                     let _ = app.emit("proactive-message", payload.clone());
@@ -707,9 +752,34 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
         text: text.clone(),
         kind: kind.into(),
         behavior: Some(behavior.into()),
+        detail,
     };
     let _ = app.emit("pet-says", payload.clone());
     let _ = app.emit("proactive-message", payload.clone());
+
+    // Weather/news: polish tip with LLM in the background (card already shown).
+    if matches!(kind, "weather" | "news") && llm.enabled && !llm.api_key.trim().is_empty() {
+        let app_bg = app.clone();
+        let llm_bg = llm.clone();
+        let pet_bg = pet.clone();
+        let kind_bg = kind.to_string();
+        tauri::async_runtime::spawn_blocking(move || {
+            let tip = match kind_bg.as_str() {
+                "weather" => crate::llm::refine_weather_tip(&llm_bg, &pet_bg),
+                "news" => crate::llm::refine_news_tip(&llm_bg, &pet_bg),
+                _ => return,
+            };
+            if let Ok(tip) = tip {
+                if tip.trim().is_empty() {
+                    return;
+                }
+                let _ = app_bg.emit(
+                    "info-card-tip",
+                    serde_json::json!({ "kind": kind_bg, "tip": tip }),
+                );
+            }
+        });
+    }
 
     if !muted {
         let notif_body = if kind == "fortune" {

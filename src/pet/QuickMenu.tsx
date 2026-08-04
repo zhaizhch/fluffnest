@@ -26,8 +26,8 @@ const ACTIONS: {
 }[] = [
   { id: "fortune", label: "今日运势", hint: "宜忌 · 穿搭 · 详解" },
   { id: "joke", label: "讲个笑话", hint: "冷笑话来一句" },
-  { id: "news", label: "科技娱乐", hint: "圈内新鲜事吐槽" },
-  { id: "weather", label: "查查天气", hint: "关心你出门" },
+  { id: "news", label: "科技娱乐", hint: "大模型查实时资讯再吐槽" },
+  { id: "weather", label: "查查天气", hint: "气温风速紫外线+防护叮嘱" },
 ];
 
 function defaultMeetingLocal(): string {

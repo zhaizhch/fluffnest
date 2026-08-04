@@ -62,12 +62,38 @@ type CareVoiceRequest struct {
 	Avoid []string    `json:"avoid"`
 }
 
+// WeatherRequest is a raw weather summary lookup.
 type WeatherRequest struct {
 	City string `json:"city"`
 }
 
+// WeatherBubbleRequest fetches weather then asks the model for a pet-style tip.
+type WeatherBubbleRequest struct {
+	LLM  LlmSettings `json:"llm"`
+	Pet  PetInstance `json:"pet"`
+	City string      `json:"city,omitempty"`
+}
+
+// NewsRequest asks the sidecar to fetch realtime news via LLM tools and roast one item.
+type NewsRequest struct {
+	LLM LlmSettings `json:"llm"`
+	Pet PetInstance `json:"pet"`
+}
+
 type TextResponse struct {
 	Text string `json:"text"`
+}
+
+// WeatherBubbleResponse includes numeric summary for the UI card + pet tip.
+type WeatherBubbleResponse struct {
+	Text    string `json:"text"`
+	Summary string `json:"summary"`
+}
+
+// NewsBubbleResponse includes headline list for the UI card + pet roast.
+type NewsBubbleResponse struct {
+	Text    string `json:"text"`
+	Summary string `json:"summary"`
 }
 
 type LinesResponse struct {

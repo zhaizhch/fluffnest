@@ -1,4 +1,9 @@
-export type Personality = "calm" | "lively" | "clingy";
+export type Personality =
+  | "calm"
+  | "lively"
+  | "clingy"
+  | "tsundere"
+  | "clever";
 
 export type PetBehavior =
   | "idle"
@@ -152,6 +157,8 @@ export type PetSaysPayload = {
   text: string;
   kind: string;
   behavior?: string | null;
+  /** Weather number card etc. */
+  detail?: string | null;
 };
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {

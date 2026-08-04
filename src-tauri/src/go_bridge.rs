@@ -174,7 +174,7 @@ fn bridge() -> &'static Mutex<GoBridge> {
         let http = reqwest::blocking::Client::builder()
             .pool_max_idle_per_host(8)
             .tcp_nodelay(true)
-            .timeout(Duration::from_secs(35))
+            .timeout(Duration::from_secs(55))
             .build()
             .expect("http client");
         Mutex::new(GoBridge {

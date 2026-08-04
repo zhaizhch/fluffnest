@@ -43,8 +43,10 @@ export function buildBlinkStep(): BehaviorStep {
 export function buildSoftIdleAction(
   speciesId: string,
   bond = 0,
+  personalityOverride?: string,
 ): BehaviorStep[] {
-  const personality = petDef(speciesId)?.personality ?? "calm";
+  const personality =
+    personalityOverride ?? petDef(speciesId)?.personality ?? "calm";
   const tier = tierFromBond(bond);
   const bias = tier.idleBias as PetBehavior[];
 
@@ -64,6 +66,10 @@ export function buildSoftIdleAction(
     pool = [...bounce, ...bounce, ...tiny];
   } else if (personality === "clingy") {
     pool = [...tiny, "look", "wave", "nuzzle", "nod", "walk"];
+  } else if (personality === "tsundere") {
+    pool = [...tiny, "look", "nod", "wave", "spin", "phone", "walk"];
+  } else if (personality === "clever") {
+    pool = [...tiny, "phone", "read", "cheer", "look", "magic", "walk"];
   } else {
     pool = [...tiny, "sit", "yawn", "stretch", "nod", "walk"];
   }
@@ -107,10 +113,10 @@ export function buildMinuteFidget(speciesId: string, bond = 0): BehaviorStep {
 export function buildIdleRoutine(
   speciesId: string,
   _owned: Set<string>,
-  _personality: string,
+  personality: string,
   bond = 0,
 ): BehaviorStep[] {
-  return buildSoftIdleAction(speciesId, bond);
+  return buildSoftIdleAction(speciesId, bond, personality);
 }
 
 /** Each click rolls a different multi-step reaction + dialogue. */
