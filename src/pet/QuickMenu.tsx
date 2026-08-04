@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export type QuickAction = "joke" | "news" | "weather" | "chat";
+export type QuickAction = "joke" | "news" | "weather" | "fortune" | "chat";
 
 export type QuickRemindKind = "water" | "stretch" | "meeting";
 
@@ -24,6 +24,7 @@ const ACTIONS: {
   label: string;
   hint: string;
 }[] = [
+  { id: "fortune", label: "今日运势", hint: "宜忌 · 穿搭 · 详解" },
   { id: "joke", label: "讲个笑话", hint: "冷笑话来一句" },
   { id: "news", label: "科技娱乐", hint: "圈内新鲜事吐槽" },
   { id: "weather", label: "查查天气", hint: "关心你出门" },

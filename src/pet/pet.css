@@ -391,7 +391,8 @@ html.pet-window #root {
 }
 
 /* —— Right-click quick menu (right of pet) —— */
-.pet-root.menu-open {
+.pet-root.menu-open,
+.pet-root.fortune-open {
   flex-direction: row;
   align-items: flex-end;
   justify-content: flex-start;
@@ -400,7 +401,8 @@ html.pet-window #root {
   cursor: default;
 }
 
-.pet-root.menu-open .pet-main {
+.pet-root.menu-open .pet-main,
+.pet-root.fortune-open .pet-main {
   width: 240px;
   flex: 0 0 auto;
   justify-content: flex-end;
@@ -463,6 +465,65 @@ html.pet-window #root {
 
 .quick-menu-close:hover {
   background: rgba(90, 70, 50, 0.12);
+}
+
+/* —— Daily fortune card (right of pet) —— */
+.fortune-card {
+  width: 260px;
+  max-height: 420px;
+  flex: 0 0 auto;
+  margin: 0 0 20px;
+  padding: 10px 12px 12px;
+  border-radius: 16px;
+  background:
+    linear-gradient(165deg, rgba(255, 250, 242, 0.97), rgba(240, 228, 214, 0.94));
+  border: 1px solid rgba(90, 70, 50, 0.1);
+  box-shadow:
+    0 14px 36px rgba(40, 28, 16, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  animation: quick-in 0.22s ease;
+  z-index: 20;
+  cursor: default;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fortune-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid rgba(90, 70, 50, 0.08);
+  color: #8a7468;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  flex: 0 0 auto;
+}
+
+.fortune-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  color: #3d3229;
+  font-size: 12px;
+  line-height: 1.55;
+  letter-spacing: 0.02em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fortune-card-body::-webkit-scrollbar {
+  width: 4px;
+}
+.fortune-card-body::-webkit-scrollbar-thumb {
+  background: rgba(90, 70, 50, 0.2);
+  border-radius: 999px;
 }
 
 .quick-menu-actions {

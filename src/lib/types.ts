@@ -129,13 +129,17 @@ export type LlmSettings = {
   weatherEnabled: boolean;
   jokeEnabled: boolean;
   newsEnabled: boolean;
+  fortuneEnabled: boolean;
   weatherCity: string;
   weatherHour: number;
+  fortuneHour: number;
   jokeIntervalMinutes: number;
   newsIntervalMinutes: number;
   lastWeatherDate?: string | null;
   lastJokeAt?: string | null;
   lastNewsAt?: string | null;
+  lastFortuneDate?: string | null;
+  cachedFortune?: string | null;
 };
 
 export type ChatMessage = {
@@ -161,8 +165,10 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   weatherEnabled: true,
   jokeEnabled: true,
   newsEnabled: true,
+  fortuneEnabled: true,
   weatherCity: "北京",
   weatherHour: 9,
+  fortuneHour: 8,
   jokeIntervalMinutes: 90,
   newsIntervalMinutes: 180,
 };

@@ -1,16 +1,17 @@
 {
   "name": "fluffnest",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:go": "bash scripts/build-go-sidecar.sh",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build --bundles app",
-    "tauri:build:dmg": "tauri build --bundles app && bash scripts/make-dmg.sh",
+    "tauri:dev": "npm run build:go && tauri dev",
+    "tauri:build": "npm run build:go && tauri build --bundles app",
+    "tauri:build:dmg": "npm run build:go && tauri build --bundles app && bash scripts/make-dmg.sh",
     "release:package": "bash scripts/package-release.sh",
     "release:package:arm": "bash scripts/package-release.sh aarch64",
     "release:package:intel": "bash scripts/package-release.sh x86_64"

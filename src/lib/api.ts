@@ -74,6 +74,6 @@ export const api = {
   getChatHistory: () => invoke<ChatMessage[]>("get_chat_history"),
   clearChatHistory: () => invoke<void>("clear_chat_history"),
   testLlm: () => invoke<string>("test_llm"),
-  triggerProactive: (kind: "weather" | "joke" | "news" | string) =>
+  triggerProactive: (kind: "weather" | "joke" | "news" | "fortune" | string) =>
     invoke<PetSaysPayload>("trigger_proactive", { kind }),
 };

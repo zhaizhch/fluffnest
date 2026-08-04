@@ -774,6 +774,26 @@ button.danger {
   margin-top: 4px;
 }
 
+.fortune-actions {
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.fortune-panel {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(160deg, #fffaf3, #f3ebe2);
+  border: 1px solid var(--line);
+  color: #3d3229;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
 .series-block {
   margin-top: 16px;
 }

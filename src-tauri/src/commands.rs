@@ -2,7 +2,7 @@ use crate::state::{
     prepare_daily_login, reward_for_streak, save_state, sync_daily_care, take_bond_budget,
     today_string, AppState, DailyLogin, OwnedAction, PetInstance, ReminderRule, Settings, Wallet,
 };
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
@@ -593,7 +593,7 @@ pub async fn test_llm(app: AppHandle) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Manually trigger weather / joke / news (also used by poller).
+/// Manually trigger weather / joke / news / fortune (also used by poller).
 #[tauri::command]
 pub async fn trigger_proactive(
     app: AppHandle,
@@ -603,6 +603,18 @@ pub async fn trigger_proactive(
     tauri::async_runtime::spawn_blocking(move || run_proactive(&app2, &kind))
         .await
         .map_err(|e| e.to_string())?
+}
+
+fn weekday_zh(weekday: chrono::Weekday) -> &'static str {
+    match weekday {
+        chrono::Weekday::Mon => "周一",
+        chrono::Weekday::Tue => "周二",
+        chrono::Weekday::Wed => "周三",
+        chrono::Weekday::Thu => "周四",
+        chrono::Weekday::Fri => "周五",
+        chrono::Weekday::Sat => "周六",
+        chrono::Weekday::Sun => "周日",
+    }
 }
 
 pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysPayload, String> {
@@ -624,6 +636,7 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
         return Err("专注模式中，宠物先安静一下".into());
     }
 
+    let today = today_string();
     let (text, behavior) = match kind {
         "weather" => {
             let summary = crate::llm::fetch_weather_summary(&llm.weather_city)?;
@@ -642,17 +655,49 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
                 crate::llm::generate_bubble_line(&llm, &pet, "news", "科技娱乐", Some(&headline))?;
             (line, crate::llm::proactive_kind_behavior("news"))
         }
+        "fortune" => {
+            // Same-day cache: return instantly without another LLM call.
+            if llm.last_fortune_date.as_deref() == Some(today.as_str()) {
+                if let Some(cached) = llm.cached_fortune.clone().filter(|s| !s.trim().is_empty()) {
+                    let payload = crate::llm::PetSaysPayload {
+                        text: cached,
+                        kind: "fortune".into(),
+                        behavior: Some(crate::llm::proactive_kind_behavior("fortune").into()),
+                    };
+                    let _ = app.emit("pet-says", payload.clone());
+                    let _ = app.emit("proactive-message", payload.clone());
+                    return Ok(payload);
+                }
+            }
+
+            let weather = crate::llm::fetch_weather_summary(&llm.weather_city).ok();
+            let now = chrono::Local::now();
+            let date_label = now.format("%Y年%m月%d日").to_string();
+            let weekday = weekday_zh(now.weekday());
+            let fortune = crate::llm::generate_daily_fortune(
+                &llm,
+                &pet,
+                &date_label,
+                weekday,
+                &llm.weather_city,
+                weather.as_deref(),
+            )?;
+            (fortune, crate::llm::proactive_kind_behavior("fortune"))
+        }
         _ => return Err(format!("未知推送类型: {kind}")),
     };
 
     {
         let shared = app.state::<SharedState>();
         let mut guard = shared.0.lock().map_err(|e| e.to_string())?;
-        let today = today_string();
         match kind {
-            "weather" => guard.settings.llm.last_weather_date = Some(today),
+            "weather" => guard.settings.llm.last_weather_date = Some(today.clone()),
             "joke" => guard.settings.llm.last_joke_at = Some(Utc::now().to_rfc3339()),
             "news" => guard.settings.llm.last_news_at = Some(Utc::now().to_rfc3339()),
+            "fortune" => {
+                guard.settings.llm.last_fortune_date = Some(today);
+                guard.settings.llm.cached_fortune = Some(text.clone());
+            }
             _ => {}
         }
         let _ = save_state(app, &guard);
@@ -667,11 +712,23 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
     let _ = app.emit("proactive-message", payload.clone());
 
     if !muted {
+        let notif_body = if kind == "fortune" {
+            // Notification preview: first non-empty line.
+            text.lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("今日运势已就绪")
+                .chars()
+                .take(48)
+                .collect::<String>()
+        } else {
+            text.clone()
+        };
         let _ = app
             .notification()
             .builder()
             .title(&pet.name)
-            .body(&text)
+            .body(&notif_body)
             .show();
     }
 

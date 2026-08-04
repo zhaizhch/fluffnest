@@ -1,6 +1,6 @@
 [package]
 name = "fluffnest"
-version = "0.2.1"
+version = "0.2.2"
 description = "绒窝 FluffNest — soft hand-drawn macOS desktop pets"
 authors = ["FluffNest"]
 edition = "2021"
@@ -22,7 +22,6 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
-regex = "1"
 msedge-tts = "0.4"
 base64 = "0.22"
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }

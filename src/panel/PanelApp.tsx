@@ -36,6 +36,8 @@ export function PanelApp() {
   const [chatInput, setChatInput] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
+  const [fortuneText, setFortuneText] = useState<string | null>(null);
+  const [fortuneBusy, setFortuneBusy] = useState(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
@@ -52,15 +54,45 @@ export function PanelApp() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory, chatBusy]);
 
-  const active = useMemo(
-    () => state?.pets.find((p) => p.isActive && p.unlocked) ?? null,
-    [state],
-  );
-
   const toast = (text: string) => {
     setMessage(text);
     window.setTimeout(() => setMessage(null), 2800);
   };
+
+  useEffect(() => {
+    const s = state?.settings;
+    if (!s) return;
+    const llm = llmFromSettings(s);
+    const today = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    if (
+      llm.lastFortuneDate === todayStr &&
+      llm.cachedFortune?.trim() &&
+      !fortuneText
+    ) {
+      setFortuneText(llm.cachedFortune);
+    }
+  }, [state?.settings, fortuneText]);
+
+  const loadFortune = async (forceToast = true) => {
+    setFortuneBusy(true);
+    try {
+      const payload = await api.triggerProactive("fortune");
+      setFortuneText(payload.text);
+      if (forceToast) toast("今日运势已更新");
+      await refresh();
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setFortuneBusy(false);
+    }
+  };
+
+  const active = useMemo(
+    () => state?.pets.find((p) => p.isActive && p.unlocked) ?? null,
+    [state],
+  );
 
   const bondProgress = useMemo(
     () => (active ? nextTierProgress(active.bond) : null),
@@ -284,6 +316,32 @@ export function PanelApp() {
               点击宠物或下方按钮互动；开启 AI 后台词会按性格生成。今日好感最多 +
               {DAILY_BOND_CAP}。登录礼需点「领取」。
             </p>
+
+            <h3>今日运势</h3>
+            <div className="row wrap fortune-actions">
+              <button
+                disabled={
+                  fortuneBusy || !llmFromSettings(state.settings).enabled
+                }
+                onClick={() => void loadFortune(true)}
+              >
+                {fortuneBusy
+                  ? "测算中…"
+                  : fortuneText
+                    ? "再看一遍"
+                    : "测今日运势"}
+              </button>
+              {!llmFromSettings(state.settings).enabled && (
+                <span className="hint warn">需先在设置里开启 AI</span>
+              )}
+            </div>
+            {fortuneText ? (
+              <div className="fortune-panel">{fortuneText}</div>
+            ) : (
+              <p className="hint">
+                结合大模型生成宜忌、穿搭与详细分析；同日再次点击会直接读取缓存。
+              </p>
+            )}
 
             <h3>互动</h3>
             <div className="row wrap">
@@ -960,9 +1018,43 @@ export function PanelApp() {
                     />
                     科技/娱乐新闻吐槽（间隔 {llm.newsIntervalMinutes} 分钟）
                   </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={llm.fortuneEnabled}
+                      disabled={!llm.enabled}
+                      onChange={(e) =>
+                        void saveLlm({ fortuneEnabled: e.target.checked })
+                      }
+                    />
+                    今日运势晨间推送
+                  </label>
+                  <label className="field">
+                    <span>运势推送时刻（本地小时 0–23）</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={llm.fortuneHour}
+                      onChange={(e) =>
+                        setState({
+                          ...state,
+                          settings: withLlm(state.settings, {
+                            fortuneHour: Number(e.target.value) || 0,
+                          }),
+                        })
+                      }
+                      onBlur={() =>
+                        void saveLlm({
+                          fortuneHour: Math.min(23, Math.max(0, llm.fortuneHour)),
+                        })
+                      }
+                    />
+                  </label>
                   <div className="row proactive-row">
                     {(
                       [
+                        ["fortune", "今日运势"],
                         ["weather", "现在查天气"],
                         ["joke", "讲个冷笑话"],
                         ["news", "科技娱乐"],
@@ -974,7 +1066,14 @@ export function PanelApp() {
                         onClick={async () => {
                           try {
                             const payload = await api.triggerProactive(kind);
-                            toast(payload.text);
+                            if (kind === "fortune") {
+                              setFortuneText(payload.text);
+                              setTab("status");
+                              toast("今日运势已更新");
+                              await refresh();
+                            } else {
+                              toast(payload.text);
+                            }
                           } catch (e) {
                             toast(String(e));
                           }

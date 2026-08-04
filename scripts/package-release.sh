@@ -47,6 +47,16 @@ mkdir -p "$OUT"
 
 echo "==> FluffNest v${VERSION} (${ARCH_LABEL})"
 
+# Build Go AI sidecar for the release architecture before Tauri bundles it.
+case "$ARCH_LABEL" in
+  aarch64) GOARCH=arm64 bash "$ROOT/scripts/build-go-sidecar.sh" ;;
+  x86_64) GOARCH=amd64 bash "$ROOT/scripts/build-go-sidecar.sh" ;;
+  universal)
+    GOARCH=arm64 bash "$ROOT/scripts/build-go-sidecar.sh"
+    GOARCH=amd64 bash "$ROOT/scripts/build-go-sidecar.sh"
+    ;;
+esac
+
 if [[ -n "$TAURI_TARGET" ]]; then
   rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
   npm run tauri build -- --bundles app --target "$TAURI_TARGET"

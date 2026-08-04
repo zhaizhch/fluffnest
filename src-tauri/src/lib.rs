@@ -1,4 +1,5 @@
 mod commands;
+mod go_bridge;
 mod llm;
 mod state;
 mod tts;
@@ -8,7 +9,7 @@ use state::load_state;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Manager, RunEvent, WindowEvent,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,6 +24,9 @@ pub fn run() {
 
             // Edge TTS / rustls needs a process-level crypto provider.
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+            // Warm Go AI sidecar (LLM / weather / news) on a side thread.
+            std::thread::spawn(|| go_bridge::start());
 
             let show_pet = MenuItem::with_id(app, "show_pet", "显示宠物", true, None::<&str>)?;
             let hide_pet = MenuItem::with_id(app, "hide_pet", "隐藏宠物", true, None::<&str>)?;
@@ -121,8 +125,13 @@ pub fn run() {
             commands::speak_speech,
             commands::generate_care_voice_lines,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running fluffnest");
+        .build(tauri::generate_context!())
+        .expect("error while building fluffnest")
+        .run(|_app, event| {
+            if let RunEvent::Exit = event {
+                go_bridge::shutdown();
+            }
+        });
 }
 
 fn check_reminders(app: &tauri::AppHandle) {
@@ -213,7 +222,7 @@ fn check_reminders(app: &tauri::AppHandle) {
 fn check_proactive(app: &tauri::AppHandle) {
     use chrono::{DateTime, Local, Timelike, Utc};
 
-    let (should_weather, should_joke, should_news) = {
+    let (should_weather, should_fortune, should_joke, should_news) = {
         let shared = match app.try_state::<SharedState>() {
             Some(s) => s,
             None => return,
@@ -235,6 +244,10 @@ fn check_proactive(app: &tauri::AppHandle) {
         let should_weather = llm.weather_enabled
             && hour >= llm.weather_hour
             && llm.last_weather_date.as_deref() != Some(today.as_str());
+
+        let should_fortune = llm.fortune_enabled
+            && hour >= llm.fortune_hour
+            && llm.last_fortune_date.as_deref() != Some(today.as_str());
 
         let should_joke = if llm.joke_enabled {
             match &llm.last_joke_at {
@@ -269,12 +282,14 @@ fn check_proactive(app: &tauri::AppHandle) {
             false
         };
 
-        (should_weather, should_joke, should_news)
+        (should_weather, should_fortune, should_joke, should_news)
     };
 
     // Run at most one proactive item per tick, on a side thread (never block poller).
     let kind = if should_weather {
         Some("weather")
+    } else if should_fortune {
+        Some("fortune")
     } else if should_joke {
         Some("joke")
     } else if should_news {

@@ -1107,7 +1107,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "msedge-tts",
- "regex",
  "reqwest 0.12.28",
  "rustls",
  "serde",

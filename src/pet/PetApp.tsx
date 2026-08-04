@@ -50,7 +50,8 @@ import { QuickMenu, type QuickRemindKind } from "./QuickMenu";
 import "./pet.css";
 
 const PET_SIZE = { w: 260, h: 320 };
-const MENU_SIZE = { w: 520, h: 360 };
+const MENU_SIZE = { w: 520, h: 400 };
+const FORTUNE_SIZE = { w: 540, h: 460 };
 
 function pickBubble(_speciesId: string, behavior: PetBehavior): string | null {
   const cat = getCatalogAction(behavior);
@@ -77,6 +78,7 @@ export function PetApp() {
   const [risingAction, setRisingAction] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuBusy, setMenuBusy] = useState(false);
+  const [fortuneText, setFortuneText] = useState<string | null>(null);
   const [careAlert, setCareAlert] = useState<CareAlertPlan | null>(null);
   const [dancePose, setDancePose] = useState<DancePose | null>(null);
   const dragRef = useRef(false);
@@ -111,8 +113,9 @@ export function PetApp() {
   const startCareAlert = useCallback((kind: "water" | "stretch", spokenHint?: string) => {
     if (careAlertRef.current) return;
 
-    // Close quick menu if open (size restored by roam restore path)
+    // Close quick menu / fortune if open (size restored by roam restore path)
     setMenuOpen(false);
+    setFortuneText(null);
 
     const speciesId = petRef.current?.speciesId ?? "mochi";
     const petName = petRef.current?.name ?? "绒窝";
@@ -414,6 +417,39 @@ export function PetApp() {
     (payload: PetSaysPayload) => {
       const species = petRef.current?.speciesId ?? "mochi";
       const b = (payload.behavior as PetBehavior) || "wave";
+
+      if (payload.kind === "fortune") {
+        setMenuOpen(false);
+        setFortuneText(payload.text);
+        void getCurrentWindow()
+          .setSize(new LogicalSize(FORTUNE_SIZE.w, FORTUNE_SIZE.h))
+          .catch(() => undefined);
+        showBubble("今日运势来啦～", 2800);
+        if (species === "rising") {
+          void runRisingSteps(
+            [
+              { action: "Hello", durationMs: 2000 },
+              { action: "Stand", durationMs: 1600 },
+            ],
+            { userInitiated: true },
+          );
+          return;
+        }
+        void runSequence(
+          [
+            {
+              behavior: b === "magic" ? "magic" : "cheer",
+              durationMs: 2200,
+              bubbleChance: 0,
+            },
+            { behavior: "idle", durationMs: 800, bubbleChance: 0 },
+          ],
+          species,
+          { userInitiated: true, skipLlm: true },
+        );
+        return;
+      }
+
       showBubble(payload.text, 4200);
       if (species === "rising") {
         void runRisingSteps(
@@ -748,6 +784,10 @@ export function PetApp() {
   const clickTimer = useRef<number | null>(null);
 
   const onClick = async () => {
+    if (fortuneText) {
+      closeFortune();
+      return;
+    }
     if (menuOpen) {
       closeMenu();
       return;
@@ -808,14 +848,6 @@ export function PetApp() {
     }, 220);
   };
 
-  const openPanel = useCallback(() => {
-    setMenuOpen(false);
-    WebviewWindow.getByLabel("panel").then((w) => {
-      w?.show();
-      w?.setFocus();
-    });
-  }, []);
-
   const setPetWindowSize = useCallback(async (w: number, h: number) => {
     try {
       await getCurrentWindow().setSize(new LogicalSize(w, h));
@@ -824,47 +856,77 @@ export function PetApp() {
     }
   }, []);
 
+  const openPanel = useCallback(() => {
+    setMenuOpen(false);
+    setFortuneText(null);
+    void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
+    WebviewWindow.getByLabel("panel").then((w) => {
+      w?.show();
+      w?.setFocus();
+    });
+  }, [setPetWindowSize]);
+
   const closeMenu = useCallback(() => {
+    setMenuOpen(false);
+    if (!fortuneText) {
+      void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
+    }
+  }, [fortuneText, setPetWindowSize]);
+
+  const closeFortune = useCallback(() => {
+    setFortuneText(null);
     setMenuOpen(false);
     void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
   }, [setPetWindowSize]);
 
   const openMenu = useCallback(() => {
+    setFortuneText(null);
     setMenuOpen(true);
     void setPetWindowSize(MENU_SIZE.w, MENU_SIZE.h);
   }, [setPetWindowSize]);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen && !fortuneText) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeMenu();
+      if (e.key !== "Escape") return;
+      if (fortuneText) closeFortune();
+      else closeMenu();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [menuOpen, closeMenu]);
+  }, [menuOpen, fortuneText, closeMenu, closeFortune]);
 
   const runQuickAction = useCallback(
-    async (kind: "joke" | "news" | "weather") => {
+    async (kind: "joke" | "news" | "weather" | "fortune") => {
       const llm = llmFromSettings(settingsRef.current);
       if (!llm.enabled) {
         showBubble("先去面板设置里开启 AI 哦", 2800);
         return;
       }
       setMenuBusy(true);
-      showBubble(
-        kind === "joke" ? "我想想笑话…" : kind === "news" ? "翻翻科技娱乐…" : "看看天气…",
-        2400,
-      );
+      const thinking =
+        kind === "fortune"
+          ? "掐指一算今日运势…"
+          : kind === "joke"
+            ? "我想想笑话…"
+            : kind === "news"
+              ? "翻翻科技娱乐…"
+              : "看看天气…";
+      showBubble(thinking, 2400);
       try {
         await api.triggerProactive(kind);
-        closeMenu();
+        setMenuOpen(false);
+        // fortune keeps the enlarged window via playPetSays
+        if (kind !== "fortune") {
+          void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
+        }
       } catch (err) {
         showBubble(String(err).replace(/^.*Error:\s*/i, "") || "稍后再试", 2800);
       } finally {
         setMenuBusy(false);
       }
     },
-    [closeMenu, showBubble],
+    [setPetWindowSize, showBubble],
   );
 
   const runQuickChat = useCallback(
@@ -964,7 +1026,7 @@ export function PetApp() {
 
   return (
     <div
-      className={`pet-root species-${species} behavior-${visual} action-${behavior} face-${facing}${menuOpen ? " menu-open" : ""}${careAlert ? " care-alerting care-dancing" : ""}${dancePose ? ` care-pose-${dancePose}` : ""}`}
+      className={`pet-root species-${species} behavior-${visual} action-${behavior} face-${facing}${menuOpen ? " menu-open" : ""}${fortuneText ? " fortune-open" : ""}${careAlert ? " care-alerting care-dancing" : ""}${dancePose ? ` care-pose-${dancePose}` : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -989,7 +1051,8 @@ export function PetApp() {
           setRisingAction("RbtnClk");
           clearRisingActionSoon(1400);
         }
-        if (menuOpen) closeMenu();
+        if (fortuneText) closeFortune();
+        else if (menuOpen) closeMenu();
         else openMenu();
       }}
       onDoubleClick={() => {
@@ -1071,6 +1134,32 @@ export function PetApp() {
         onChat={runQuickChat}
         onRemind={runQuickRemind}
       />
+      {fortuneText && (
+        <aside
+          className="fortune-card"
+          role="dialog"
+          aria-label="今日运势"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          <header className="fortune-card-head">
+            <span>今日运势</span>
+            <button
+              type="button"
+              className="quick-menu-close"
+              aria-label="关闭"
+              onClick={closeFortune}
+            >
+              ×
+            </button>
+          </header>
+          <div className="fortune-card-body">{fortuneText}</div>
+        </aside>
+      )}
     </div>
   );
 }

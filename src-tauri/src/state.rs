@@ -120,6 +120,9 @@ fn default_news_interval() -> i32 {
 fn default_true() -> bool {
     true
 }
+fn default_fortune_hour() -> u32 {
+    8
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,7 +142,7 @@ pub struct LlmSettings {
     /// Generate click / idle / reminder bubbles via LLM.
     #[serde(default = "default_true")]
     pub dialogue_enabled: bool,
-    /// Weather / joke / news proactive pushes.
+    /// Weather / joke / news / fortune proactive pushes.
     #[serde(default)]
     pub proactive_enabled: bool,
     #[serde(default = "default_true")]
@@ -148,11 +151,16 @@ pub struct LlmSettings {
     pub joke_enabled: bool,
     #[serde(default = "default_true")]
     pub news_enabled: bool,
+    #[serde(default = "default_true")]
+    pub fortune_enabled: bool,
     #[serde(default = "default_city")]
     pub weather_city: String,
     /// Local hour (0–23) to greet with weather once per day.
     #[serde(default = "default_weather_hour")]
     pub weather_hour: u32,
+    /// Local hour (0–23) to push today's fortune once per day.
+    #[serde(default = "default_fortune_hour")]
+    pub fortune_hour: u32,
     #[serde(default = "default_joke_interval")]
     pub joke_interval_minutes: i32,
     #[serde(default = "default_news_interval")]
@@ -163,6 +171,11 @@ pub struct LlmSettings {
     pub last_joke_at: Option<String>,
     #[serde(default)]
     pub last_news_at: Option<String>,
+    #[serde(default)]
+    pub last_fortune_date: Option<String>,
+    /// Cached fortune text for `last_fortune_date` (same calendar day).
+    #[serde(default)]
+    pub cached_fortune: Option<String>,
 }
 
 impl Default for LlmSettings {
@@ -178,13 +191,17 @@ impl Default for LlmSettings {
             weather_enabled: true,
             joke_enabled: true,
             news_enabled: true,
+            fortune_enabled: true,
             weather_city: default_city(),
             weather_hour: default_weather_hour(),
+            fortune_hour: default_fortune_hour(),
             joke_interval_minutes: default_joke_interval(),
             news_interval_minutes: default_news_interval(),
             last_weather_date: None,
             last_joke_at: None,
             last_news_at: None,
+            last_fortune_date: None,
+            cached_fortune: None,
         }
     }
 }
