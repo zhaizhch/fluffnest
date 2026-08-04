@@ -189,6 +189,30 @@ nav a:hover { color: var(--ink); }
   height: auto;
 }
 
+.hero-try {
+  background:
+    radial-gradient(ellipse 70% 50% at 30% 0%, #efe0cf 0%, transparent 55%),
+    var(--card);
+  min-height: 520px;
+}
+
+.hero-try-frame {
+  display: block;
+  width: 100%;
+  height: 520px;
+  border: 0;
+  background: transparent;
+}
+
+@media (max-width: 899px) {
+  .hero-try {
+    min-height: 560px;
+  }
+  .hero-try-frame {
+    height: 560px;
+  }
+}
+
 @keyframes rise {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }

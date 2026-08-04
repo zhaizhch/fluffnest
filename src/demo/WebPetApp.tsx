@@ -13,9 +13,16 @@ import {
 import { PetFigure } from "../pet/PetFigure";
 import { nextSoftActionDelayMs } from "../pet/quietSchedule";
 import "../pet/pet.css";
-import { DEMO_PETS, demoPetFromQuery, type DemoPet } from "./demoPets";
+import {
+  DEMO_PETS,
+  DEMO_UNLOCK_FEATURES,
+  demoPetFromQuery,
+  type DemoPet,
+} from "./demoPets";
 
 const DEMO_BOND = 48;
+const DOWNLOAD_URL =
+  "https://github.com/zhaizhch/fluffnest/releases/latest";
 
 const PERSONALITY_GREET: Record<Personality, string[]> = {
   calm: ["嗯，你好。", "我在这儿陪你。", "慢慢来就好。"],
@@ -31,6 +38,32 @@ function pick<T>(arr: T[]): T {
 
 function isEmbed(): boolean {
   return new URLSearchParams(window.location.search).get("embed") === "1";
+}
+
+function UnlockPanel({ compact }: { compact: boolean }) {
+  const preview = DEMO_UNLOCK_FEATURES.slice(0, compact ? 5 : 7);
+
+  return (
+    <aside className={`demo-unlock${compact ? " is-compact" : ""}`}>
+      <p className="demo-unlock-title">
+        下载 App，接入你自己的大模型 API，可解锁更多功能：
+      </p>
+      <ul className="demo-unlock-list">
+        {preview.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+        <li className="demo-unlock-more">以及更多…</li>
+      </ul>
+      <a
+        className="demo-btn primary demo-unlock-btn"
+        href={DOWNLOAD_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        下载 macOS 版
+      </a>
+    </aside>
+  );
 }
 
 export function WebPetApp() {
@@ -83,14 +116,12 @@ export function WebPetApp() {
     [showBubble],
   );
 
-  // Greet when switching pets
   useEffect(() => {
     const lines =
       PERSONALITY_GREET[pet.personality] ?? PERSONALITY_GREET.clingy;
     showBubble(pick(lines!), 3200);
   }, [pet.id, pet.personality, showBubble]);
 
-  // Soft idle loop — skip while a click sequence is running
   useEffect(() => {
     let cancelled = false;
     const tick = () => {
@@ -182,34 +213,33 @@ export function WebPetApp() {
                   species={pet.id}
                   behavior={visual}
                   facing={facing}
-                  size={168}
+                  size={embed ? 156 : 168}
+                  muted
                 />
               </div>
             </div>
             <div className="name-tag">{catalogName}</div>
           </div>
         </div>
-        <p className="demo-hint">点一下宠物互动 · 会自己眨眼蹦跳</p>
-      </div>
+        <p className="demo-hint">点一下互动 · 会自己眨眼蹦跳</p>
 
-      {!embed && (
-        <>
-          <section className="demo-controls" aria-label="试玩选项">
-            <div className="demo-field">
-              <span className="demo-label">换一只</span>
-              <div className="demo-chips">
-                {DEMO_PETS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={p.id === pet.id ? "is-on" : ""}
-                    onClick={() => switchPet(p)}
-                  >
-                    {p.name}
-                  </button>
-                ))}
-              </div>
+        <div className="demo-controls" aria-label="试玩选项">
+          <div className="demo-field">
+            <span className="demo-label">换一只</span>
+            <div className="demo-chips">
+              {DEMO_PETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={p.id === pet.id ? "is-on" : ""}
+                  onClick={() => switchPet(p)}
+                >
+                  {p.name}
+                </button>
+              ))}
             </div>
+          </div>
+          {!embed && (
             <div className="demo-field">
               <span className="demo-label">性格</span>
               <div className="demo-chips">
@@ -225,32 +255,37 @@ export function WebPetApp() {
                 ))}
               </div>
             </div>
-          </section>
+          )}
+        </div>
 
-          <footer className="demo-foot">
-            <p>
-              试玩版没有天气 / 新闻 / AI 对话。完整能力请下载 macOS 桌宠，在本地配置你自己的 API Key。
-            </p>
-            <div className="demo-cta">
-              <a
-                className="demo-btn primary"
-                href="https://github.com/zhaizhch/fluffnest/releases/latest"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                下载 macOS 版
-              </a>
-              <a
-                className="demo-btn ghost"
-                href="https://github.com/zhaizhch/fluffnest"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                源码
-              </a>
-            </div>
-          </footer>
-        </>
+        <UnlockPanel compact={embed} />
+      </div>
+
+      {!embed && (
+        <footer className="demo-foot">
+          <p>
+            网页试玩仅本地动作与台词，不上传数据、不需要 API Key。完整能力请下载
+            macOS 桌宠，在本地配置你自己的密钥。
+          </p>
+          <div className="demo-cta">
+            <a
+              className="demo-btn primary"
+              href={DOWNLOAD_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              下载 macOS 版
+            </a>
+            <a
+              className="demo-btn ghost"
+              href="https://github.com/zhaizhch/fluffnest"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              源码
+            </a>
+          </div>
+        </footer>
       )}
     </div>
   );

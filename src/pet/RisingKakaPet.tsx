@@ -8,6 +8,8 @@ type Props = {
   actionOverride?: string | null;
   facing?: "left" | "right";
   size?: number;
+  /** Skip original SFX (e.g. muted web try-on embeds). */
+  muted?: boolean;
 };
 
 /** Map FluffNest behaviors → original Rising KaKa APNG action names. */
@@ -63,6 +65,7 @@ export function RisingKakaPet({
   actionOverride = null,
   facing = "right",
   size = 192,
+  muted = false,
 }: Props) {
   const action = actionOverride || actionFor(behavior);
   const src = `/pets/rising-kaka/apng/${action}.png`;
@@ -74,12 +77,16 @@ export function RisingKakaPet({
   };
 
   useEffect(() => {
+    if (muted) {
+      stopRisingSound();
+      return;
+    }
     const loop = action === "Sleeping";
     playRisingSound(action, { loop, volume: loop ? 0.65 : 0.8 });
     return () => {
       stopRisingSound();
     };
-  }, [action]);
+  }, [action, muted]);
 
   return (
     <div

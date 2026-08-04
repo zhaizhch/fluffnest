@@ -18,9 +18,14 @@ fi
 
 echo "→ copy demo pet sprites to website/pets"
 mkdir -p "$PETS_OUT"
-for pack in butter-bear milk-tea-mouse kebo; do
+for pack in kaka-5 rising-kaka; do
   rm -rf "$PETS_OUT/$pack"
   cp -R "$ROOT/public/pets/$pack" "$PETS_OUT/$pack"
+done
+
+# Remove previous try-on packs if present
+for pack in butter-bear milk-tea-mouse kebo; do
+  rm -rf "$PETS_OUT/$pack"
 done
 
 # Favicon for try page (optional)

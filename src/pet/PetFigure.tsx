@@ -9,6 +9,8 @@ type Props = {
   size?: number;
   /** Rising KaKa explicit action override (Dragging / RbtnClk / …) */
   risingAction?: string | null;
+  /** Mute Rising KaKa SFX */
+  muted?: boolean;
 };
 
 export function PetFigure({
@@ -17,6 +19,7 @@ export function PetFigure({
   facing = "right",
   size = 192,
   risingAction = null,
+  muted = false,
 }: Props) {
   if (usesCustomFigure(species)) {
     return (
@@ -27,6 +30,7 @@ export function PetFigure({
             actionOverride={risingAction}
             facing={facing}
             size={size}
+            muted={muted}
           />
         ) : null}
       </div>
