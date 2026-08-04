@@ -751,8 +751,19 @@ export function spriteFor(speciesId: string): {
   label: string;
 } {
   const def = petDef(speciesId) ?? PET_CATALOG[0]!;
+  let src = def.sprite ?? "/pets/butter-bear/spritesheet.webp";
+  // Injected by vite.demo.config when building GitHub Pages try-on.
+  const injected =
+    typeof __FN_ASSET_BASE__ !== "undefined" ? __FN_ASSET_BASE__ : "";
+  const prefix = String(injected || import.meta.env.VITE_PUBLIC_BASE || "").replace(
+    /\/$/,
+    "",
+  );
+  if (prefix && src.startsWith("/")) {
+    src = `${prefix}${src}`;
+  }
   return {
-    src: def.sprite ?? "/pets/butter-bear/spritesheet.webp",
+    src,
     spriteVersionNumber: def.spriteVersion,
     label: def.name,
   };

@@ -1,8 +1,0 @@
-{
-  "id": "rising-kaka",
-  "displayName": "瑞星小狮子卡卡",
-  "description": "Original Rising AntiVirus KaKa animations (APNG), sourced from rwv/Rising-KaKa.",
-  "source": "https://github.com/rwv/Rising-KaKa",
-  "kind": "animal",
-  "render": "apng"
-}

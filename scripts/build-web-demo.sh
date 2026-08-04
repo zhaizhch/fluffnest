@@ -1,39 +1,57 @@
 #!/usr/bin/env bash
-# Build the browser try-on demo into website/try (no API keys, no Tauri).
+# Build the browser try-on demo (暖卡卡 only, no API keys / no Tauri).
+# - website/try + website/pets  → virtualpet.beer
+# - dist-pages                 → GitHub Pages (zhaizhch.github.io/fluffnest)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT/website/try"
-PETS_OUT="$ROOT/website/pets"
+PACK="kaka-5"
 
 cd "$ROOT"
 
-echo "→ vite build (demo → website/try)"
-npx vite build --config vite.demo.config.ts
+build_one() {
+  local target="$1"
+  echo "→ vite build (demo target=${target})"
+  DEMO_TARGET="$target" npx vite build --config vite.demo.config.ts
+}
 
-# demo.html is emitted at website/try/demo.html; expose as index for /try/
-if [[ -f "$OUT/demo.html" ]]; then
-  mv "$OUT/demo.html" "$OUT/index.html"
+# ── virtualpet.beer ──────────────────────────────────────────
+build_one site
+SITE_OUT="$ROOT/website/try"
+if [[ -f "$SITE_OUT/demo.html" ]]; then
+  mv "$SITE_OUT/demo.html" "$SITE_OUT/index.html"
 fi
 
-echo "→ copy demo pet sprites to website/pets"
+PETS_OUT="$ROOT/website/pets"
 mkdir -p "$PETS_OUT"
-for pack in kaka-5 rising-kaka; do
-  rm -rf "$PETS_OUT/$pack"
-  cp -R "$ROOT/public/pets/$pack" "$PETS_OUT/$pack"
-done
+rm -rf "$PETS_OUT"/*
+cp -R "$ROOT/public/pets/$PACK" "$PETS_OUT/$PACK"
 
-# Remove previous try-on packs if present
-for pack in butter-bear milk-tea-mouse kebo; do
-  rm -rf "$PETS_OUT/$pack"
-done
-
-# Favicon for try page (optional)
+# ── GitHub Pages artifact ────────────────────────────────────
+build_one pages
+PAGES_OUT="$ROOT/dist-pages"
+if [[ -f "$PAGES_OUT/demo.html" ]]; then
+  mv "$PAGES_OUT/demo.html" "$PAGES_OUT/index.html"
+fi
+mkdir -p "$PAGES_OUT/pets"
+cp -R "$ROOT/public/pets/$PACK" "$PAGES_OUT/pets/$PACK"
 if [[ -f "$ROOT/website/assets/social.png" ]]; then
-  mkdir -p "$OUT/assets"
-  cp "$ROOT/website/assets/social.png" "$OUT/assets/social.png" 2>/dev/null || true
+  mkdir -p "$PAGES_OUT/assets"
+  cp "$ROOT/website/assets/social.png" "$PAGES_OUT/assets/social.png" 2>/dev/null || true
+fi
+# Absolute /assets/... would miss the /fluffnest/ prefix on project Pages.
+if [[ -f "$PAGES_OUT/index.html" ]]; then
+  sed -i.bak 's|href="/assets/social.png"|href="/fluffnest/assets/social.png"|g' "$PAGES_OUT/index.html"
+  rm -f "$PAGES_OUT/index.html.bak"
+fi
+
+# Favicon for site try page
+if [[ -f "$ROOT/website/assets/social.png" ]]; then
+  mkdir -p "$SITE_OUT/assets"
+  cp "$ROOT/website/assets/social.png" "$SITE_OUT/assets/social.png" 2>/dev/null || true
 fi
 
 echo "✓ demo ready:"
-echo "    open $OUT/index.html  (or https://virtualpet.beer/try/)"
+echo "    site : $SITE_OUT  (+ $PETS_OUT/$PACK)"
+echo "    pages: $PAGES_OUT  → https://zhaizhch.github.io/fluffnest/"
 echo "    embed: <iframe src=\"https://virtualpet.beer/try/?embed=1\" …>"

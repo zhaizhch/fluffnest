@@ -223,23 +223,45 @@ export function WebPetApp() {
         </div>
         <p className="demo-hint">点一下互动 · 会自己眨眼蹦跳</p>
 
-        <div className="demo-controls" aria-label="试玩选项">
-          <div className="demo-field">
-            <span className="demo-label">换一只</span>
-            <div className="demo-chips">
-              {DEMO_PETS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={p.id === pet.id ? "is-on" : ""}
-                  onClick={() => switchPet(p)}
-                >
-                  {p.name}
-                </button>
-              ))}
+        {DEMO_PETS.length > 1 && (
+          <div className="demo-controls" aria-label="试玩选项">
+            <div className="demo-field">
+              <span className="demo-label">换一只</span>
+              <div className="demo-chips">
+                {DEMO_PETS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={p.id === pet.id ? "is-on" : ""}
+                    onClick={() => switchPet(p)}
+                  >
+                    {p.name}
+                  </button>
+                ))}
+              </div>
             </div>
+            {!embed && (
+              <div className="demo-field">
+                <span className="demo-label">性格</span>
+                <div className="demo-chips">
+                  {PERSONALITIES.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={p.id === personality ? "is-on" : ""}
+                      onClick={() => switchPersonality(p)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          {!embed && (
+        )}
+
+        {!embed && DEMO_PETS.length === 1 && (
+          <div className="demo-controls" aria-label="试玩选项">
             <div className="demo-field">
               <span className="demo-label">性格</span>
               <div className="demo-chips">
@@ -255,8 +277,8 @@ export function WebPetApp() {
                 ))}
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         <UnlockPanel compact={embed} />
       </div>

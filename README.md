@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://virtualpet.beer"><strong>官网 virtualpet.beer</strong></a>
   ·
-  <a href="https://virtualpet.beer/try/"><strong>网页试玩（无需 Key）</strong></a>
+  <a href="https://zhaizhch.github.io/fluffnest/"><strong>网页试玩（暖卡卡）</strong></a>
   ·
   <a href="https://github.com/zhaizhch/fluffnest/releases/latest"><strong>⬇ 立刻下载最新版</strong></a>
   ·
@@ -154,10 +154,14 @@ npm run demo:dev             # 浏览器试玩开发（无需 Key）
 npm run demo:build           # 输出到 website/try + website/pets
 ```
 
-网页试玩：https://virtualpet.beer/try/（纯前端本地台词，不含 AI / 天气 / 新闻）。博客可 iframe：
+网页试玩（暖卡卡，无需 Key）：
+- GitHub Pages：https://zhaizhch.github.io/fluffnest/
+- 官网嵌入：https://virtualpet.beer/ （首页右侧）
+
+博客可 iframe：
 
 ```html
-<iframe src="https://virtualpet.beer/try/?embed=1" width="320" height="360" style="border:0;background:transparent;max-width:100%" loading="lazy" title="绒窝试玩"></iframe>
+<iframe src="https://zhaizhch.github.io/fluffnest/?embed=1" width="320" height="520" style="border:0;background:transparent;max-width:100%" loading="lazy" title="绒窝试玩"></iframe>
 ```
 
 推送 `v*` tag 后，Actions 会构建 aarch64 + x86_64 并写入 Release。

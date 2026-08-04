@@ -8,7 +8,7 @@ export type DemoPet = {
   vibe: string;
 };
 
-/** Browser try-on roster — 暖卡卡 default + 瑞星小狮子. */
+/** Browser try-on — 暖卡卡 only. */
 export const DEMO_PETS: DemoPet[] = [
   {
     id: "kaka5",
@@ -16,13 +16,6 @@ export const DEMO_PETS: DemoPet[] = [
     personality: "clingy",
     pack: "kaka-5",
     vibe: "暖色卡卡 · 软萌跟班",
-  },
-  {
-    id: "rising",
-    name: "瑞星小狮子",
-    personality: "lively",
-    pack: "rising-kaka",
-    vibe: "瑞星卡卡 · 原版动作",
   },
 ];
 
