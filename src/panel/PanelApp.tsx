@@ -1,28 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type InteractAction } from "../lib/api";
 import { crossedTier, nextTierProgress } from "../lib/bondTiers";
-import {
-  CHECKIN_ENERGY_COST,
-  DAILY_BOND_CAP,
-  INTERACT_ENERGY_COST,
-} from "../lib/careRules";
+import { DAILY_BOND_CAP } from "../lib/careRules";
 import { weekRewardPreview } from "../lib/dailyRewards";
 import {
   categoryDexProgress,
   overallDexProgress,
   unlockSourceLabel,
 } from "../lib/dexProgress";
+import { llmFromSettings, withLlm } from "../lib/llm";
 import {
   PET_CATEGORIES,
   categoryLabel,
   petDef,
   type PetCategoryId,
 } from "../lib/petCatalog";
-import type { AppState, ReminderRule } from "../lib/types";
+import type { AppState, ChatMessage, ReminderRule } from "../lib/types";
 import { PetFigure } from "../pet/PetFigure";
 import "./panel.css";
 
-type Tab = "status" | "roster" | "reminders" | "shop" | "settings";
+type Tab = "status" | "chat" | "roster" | "reminders" | "shop" | "settings";
 
 const COIN_HINT =
   "金币：提醒打卡 +5 · 登录礼 · 亲密度升档礼 · 小铺花币解锁宠物";
@@ -36,15 +33,24 @@ export function PanelApp() {
   const [meetingTitle, setMeetingTitle] = useState("站会");
   const [meetingAt, setMeetingAt] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [chatInput, setChatInput] = useState("");
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [chatBusy, setChatBusy] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
     const s = await api.getState();
     setState(s);
+    setChatHistory(s.chatHistory ?? []);
   }, []);
 
   useEffect(() => {
     refresh().catch(console.error);
   }, [refresh]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory, chatBusy]);
 
   const active = useMemo(
     () => state?.pets.find((p) => p.isActive && p.unlocked) ?? null,
@@ -200,6 +206,7 @@ export function PanelApp() {
           {(
             [
               ["status", "状态"],
+              ["chat", "对话"],
               ["roster", "图鉴"],
               ["reminders", "提醒"],
               ["shop", "小铺"],
@@ -259,7 +266,6 @@ export function PanelApp() {
             </div>
             <div className="bars">
               <Bar label="心情" value={active.mood} color="#d4a090" />
-              <Bar label="体力" value={active.energy} color="#8faf98" />
               <Bar
                 label="今日好感"
                 value={Math.min(
@@ -275,8 +281,8 @@ export function PanelApp() {
 
             <p className="hint coin-hint">{COIN_HINT}</p>
             <p className="hint">
-              互动/打卡消耗体力，闲置时慢慢恢复；今日好感最多 +{DAILY_BOND_CAP}。
-              登录礼需点「领取」，不会自动发放。
+              点击宠物或下方按钮互动；开启 AI 后台词会按性格生成。今日好感最多 +
+              {DAILY_BOND_CAP}。登录礼需点「领取」。
             </p>
 
             <h3>互动</h3>
@@ -291,11 +297,9 @@ export function PanelApp() {
                   ["play", "逗玩"],
                 ] as [InteractAction, string][]
               ).map(([action, label]) => {
-                const cost = INTERACT_ENERGY_COST[action] ?? 0;
                 return (
                   <button
                     key={action}
-                    title={cost > 0 ? `消耗体力 ${cost}` : "恢复体力"}
                     onClick={async () => {
                       const before = active.bond;
                       const coinBefore = state.wallet.coin;
@@ -316,17 +320,15 @@ export function PanelApp() {
                           toast(
                             `${label} · 关系升温「${crossed.label}」· +${gift} 币`,
                           );
-                        } else if (dailyNow >= DAILY_BOND_CAP && bondBeforeDaily < DAILY_BOND_CAP) {
-                          toast(`${label} · 今日好感已达上限`);
                         } else if (
                           dailyNow >= DAILY_BOND_CAP &&
-                          bondBeforeDaily >= DAILY_BOND_CAP
+                          bondBeforeDaily < DAILY_BOND_CAP
                         ) {
-                          toast(`${label} · 好感已满，体力照常结算`);
+                          toast(`${label} · 今日好感已达上限`);
+                        } else if (dailyNow >= DAILY_BOND_CAP) {
+                          toast(`${label} · 好感已满`);
                         } else {
-                          toast(
-                            cost > 0 ? `${label} · 体力 -${cost}` : `${label} · 体力恢复`,
-                          );
+                          toast(label);
                         }
                       } catch (e) {
                         toast(String(e));
@@ -334,11 +336,6 @@ export function PanelApp() {
                     }}
                   >
                     {label}
-                    {cost > 0 ? (
-                      <small className="cost"> -{cost}</small>
-                    ) : (
-                      <small className="cost rest"> +体力</small>
-                    )}
                   </button>
                 );
               })}
@@ -364,6 +361,114 @@ export function PanelApp() {
                     {p.name}
                   </button>
                 ))}
+            </div>
+          </section>
+        )}
+
+        {tab === "chat" && (
+          <section className="card chat-card">
+            <h2>和 {active.name} 聊天</h2>
+            <p className="hint">
+              回复会按「
+              {active.personality === "calm"
+                ? "安静"
+                : active.personality === "lively"
+                  ? "活泼"
+                  : "黏人"}
+              」性格生成，并同步到桌面气泡。
+            </p>
+            {!llmFromSettings(state.settings).enabled && (
+              <p className="hint warn">请先在「设置」里开启 AI 并填写 API Key。</p>
+            )}
+            <div className="chat-log">
+              {chatHistory.length === 0 && (
+                <div className="chat-empty">还没有对话，跟 {active.name} 打个招呼吧。</div>
+              )}
+              {chatHistory.map((m, i) => (
+                <div
+                  key={`${m.at ?? i}-${i}`}
+                  className={`chat-bubble ${m.role === "user" ? "me" : "pet"}`}
+                >
+                  <small>{m.role === "user" ? "你" : active.name}</small>
+                  <p>{m.content}</p>
+                </div>
+              ))}
+              {chatBusy && (
+                <div className="chat-bubble pet thinking">
+                  <small>{active.name}</small>
+                  <p>在想怎么回你…</p>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+            <div className="chat-compose">
+              <input
+                value={chatInput}
+                disabled={chatBusy}
+                placeholder={`跟 ${active.name} 说点什么…`}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={async (e) => {
+                  if (e.key !== "Enter" || e.shiftKey) return;
+                  e.preventDefault();
+                  const text = chatInput.trim();
+                  if (!text || chatBusy) return;
+                  setChatBusy(true);
+                  setChatInput("");
+                  setChatHistory((h) => [
+                    ...h,
+                    { role: "user", content: text, at: new Date().toISOString() },
+                  ]);
+                  try {
+                    const reply = await api.chatWithPet(text);
+                    setChatHistory((h) => [...h, reply]);
+                    await refresh();
+                  } catch (err) {
+                    toast(String(err));
+                    setChatHistory((h) => h.slice(0, -1));
+                    setChatInput(text);
+                  } finally {
+                    setChatBusy(false);
+                  }
+                }}
+              />
+              <button
+                className="primary"
+                disabled={chatBusy || !chatInput.trim()}
+                onClick={async () => {
+                  const text = chatInput.trim();
+                  if (!text || chatBusy) return;
+                  setChatBusy(true);
+                  setChatInput("");
+                  setChatHistory((h) => [
+                    ...h,
+                    { role: "user", content: text, at: new Date().toISOString() },
+                  ]);
+                  try {
+                    const reply = await api.chatWithPet(text);
+                    setChatHistory((h) => [...h, reply]);
+                    await refresh();
+                  } catch (err) {
+                    toast(String(err));
+                    setChatHistory((h) => h.slice(0, -1));
+                    setChatInput(text);
+                  } finally {
+                    setChatBusy(false);
+                  }
+                }}
+              >
+                发送
+              </button>
+            </div>
+            <div className="row chat-actions">
+              <button
+                onClick={async () => {
+                  await api.clearChatHistory();
+                  setChatHistory([]);
+                  toast("已清空对话");
+                }}
+              >
+                清空记录
+              </button>
             </div>
           </section>
         )}
@@ -483,7 +588,7 @@ export function PanelApp() {
           <section className="card">
             <h2>提醒</h2>
             <p className="hint">
-              打卡消耗体力 {CHECKIN_ENERGY_COST}，+5 币 · 好感最多 +3（计入今日上限）
+              打卡 +5 币 · 好感最多 +3（计入今日上限）
             </p>
             <div className="list">
               {state.reminders.map((r) => (
@@ -502,9 +607,7 @@ export function PanelApp() {
                     try {
                       await api.completeReminder(r.id);
                       await refresh();
-                      toast(
-                        `打卡成功 · 体力 -${CHECKIN_ENERGY_COST} · +5 币`,
-                      );
+                      toast("打卡成功 · +5 币");
                     } catch (e) {
                       toast(String(e));
                     }
@@ -654,6 +757,236 @@ export function PanelApp() {
             <p className="hint">
               关闭管理员后，登录宠需通过顶部「领取」获得，不会在打开时自动发放。
             </p>
+
+            <h3>AI 大模型</h3>
+            <p className="hint">
+              兼容 OpenAI Chat Completions（也可用国内中转 / 本地 Ollama 的兼容接口）。
+              Key 保存在本机 state.json。
+            </p>
+            {(() => {
+              const llm = llmFromSettings(state.settings);
+              const saveLlm = async (
+                patch: Parameters<typeof withLlm>[1],
+              ) => {
+                const next = withLlm(state.settings, patch);
+                await api.updateSettings(next);
+                await refresh();
+              };
+              return (
+                <>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={llm.enabled}
+                      onChange={(e) => void saveLlm({ enabled: e.target.checked })}
+                    />
+                    启用 AI
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={llm.chatEnabled}
+                      disabled={!llm.enabled}
+                      onChange={(e) =>
+                        void saveLlm({ chatEnabled: e.target.checked })
+                      }
+                    />
+                    面板对话
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={llm.dialogueEnabled}
+                      disabled={!llm.enabled}
+                      onChange={(e) =>
+                        void saveLlm({ dialogueEnabled: e.target.checked })
+                      }
+                    />
+                    互动台词由 AI 生成（点击 / 闲逛 / 提醒）
+                  </label>
+                  <label className="field">
+                    <span>API Base</span>
+                    <input
+                      value={llm.apiBase}
+                      placeholder="https://api.openai.com/v1"
+                      onChange={(e) =>
+                        setState({
+                          ...state,
+                          settings: withLlm(state.settings, {
+                            apiBase: e.target.value,
+                          }),
+                        })
+                      }
+                      onBlur={() => void saveLlm({ apiBase: llm.apiBase })}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>API Key</span>
+                    <input
+                      type="password"
+                      value={llm.apiKey}
+                      placeholder="sk-…"
+                      onChange={(e) =>
+                        setState({
+                          ...state,
+                          settings: withLlm(state.settings, {
+                            apiKey: e.target.value,
+                          }),
+                        })
+                      }
+                      onBlur={() => void saveLlm({ apiKey: llm.apiKey })}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>模型</span>
+                    <input
+                      value={llm.model}
+                      placeholder="gpt-4o-mini"
+                      onChange={(e) =>
+                        setState({
+                          ...state,
+                          settings: withLlm(state.settings, {
+                            model: e.target.value,
+                          }),
+                        })
+                      }
+                      onBlur={() => void saveLlm({ model: llm.model })}
+                    />
+                  </label>
+                  <div className="row">
+                    <button
+                      className="primary"
+                      disabled={!llm.enabled}
+                      onClick={async () => {
+                        try {
+                          // persist current draft fields first
+                          await api.updateSettings(
+                            withLlm(state.settings, {
+                              apiBase: llm.apiBase,
+                              apiKey: llm.apiKey,
+                              model: llm.model,
+                            }),
+                          );
+                          const line = await api.testLlm();
+                          toast(`连通成功：${line}`);
+                        } catch (e) {
+                          toast(String(e));
+                        }
+                      }}
+                    >
+                      测试连接
+                    </button>
+                  </div>
+
+                  <h3>主动推送</h3>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={llm.proactiveEnabled}
+                      disabled={!llm.enabled}
+                      onChange={(e) =>
+                        void saveLlm({ proactiveEnabled: e.target.checked })
+                      }
+                    />
+                    开启主动推送（专注模式时自动暂停）
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={llm.weatherEnabled}
+                      disabled={!llm.enabled}
+                      onChange={(e) =>
+                        void saveLlm({ weatherEnabled: e.target.checked })
+                      }
+                    />
+                    天气问候
+                  </label>
+                  <label className="field">
+                    <span>天气城市</span>
+                    <input
+                      value={llm.weatherCity}
+                      onChange={(e) =>
+                        setState({
+                          ...state,
+                          settings: withLlm(state.settings, {
+                            weatherCity: e.target.value,
+                          }),
+                        })
+                      }
+                      onBlur={() => void saveLlm({ weatherCity: llm.weatherCity })}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>天气推送时刻（本地小时 0–23）</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={llm.weatherHour}
+                      onChange={(e) =>
+                        setState({
+                          ...state,
+                          settings: withLlm(state.settings, {
+                            weatherHour: Number(e.target.value) || 0,
+                          }),
+                        })
+                      }
+                      onBlur={() =>
+                        void saveLlm({
+                          weatherHour: Math.min(23, Math.max(0, llm.weatherHour)),
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={llm.jokeEnabled}
+                      disabled={!llm.enabled}
+                      onChange={(e) =>
+                        void saveLlm({ jokeEnabled: e.target.checked })
+                      }
+                    />
+                    冷笑话（间隔 {llm.jokeIntervalMinutes} 分钟）
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={llm.newsEnabled}
+                      disabled={!llm.enabled}
+                      onChange={(e) =>
+                        void saveLlm({ newsEnabled: e.target.checked })
+                      }
+                    />
+                    科技/娱乐新闻吐槽（间隔 {llm.newsIntervalMinutes} 分钟）
+                  </label>
+                  <div className="row proactive-row">
+                    {(
+                      [
+                        ["weather", "现在查天气"],
+                        ["joke", "讲个冷笑话"],
+                        ["news", "科技娱乐"],
+                      ] as const
+                    ).map(([kind, label]) => (
+                      <button
+                        key={kind}
+                        disabled={!llm.enabled}
+                        onClick={async () => {
+                          try {
+                            const payload = await api.triggerProactive(kind);
+                            toast(payload.text);
+                          } catch (e) {
+                            toast(String(e));
+                          }
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
           </section>
         )}
       </div>

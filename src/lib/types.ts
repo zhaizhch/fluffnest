@@ -115,6 +115,56 @@ export type Settings = {
   focusMode: boolean;
   alwaysOnTop: boolean;
   isAdmin?: boolean;
+  llm?: LlmSettings;
+};
+
+export type LlmSettings = {
+  enabled: boolean;
+  apiBase: string;
+  apiKey: string;
+  model: string;
+  chatEnabled: boolean;
+  dialogueEnabled: boolean;
+  proactiveEnabled: boolean;
+  weatherEnabled: boolean;
+  jokeEnabled: boolean;
+  newsEnabled: boolean;
+  weatherCity: string;
+  weatherHour: number;
+  jokeIntervalMinutes: number;
+  newsIntervalMinutes: number;
+  lastWeatherDate?: string | null;
+  lastJokeAt?: string | null;
+  lastNewsAt?: string | null;
+};
+
+export type ChatMessage = {
+  role: "user" | "assistant" | string;
+  content: string;
+  at?: string;
+};
+
+export type PetSaysPayload = {
+  text: string;
+  kind: string;
+  behavior?: string | null;
+};
+
+export const DEFAULT_LLM_SETTINGS: LlmSettings = {
+  enabled: false,
+  apiBase: "https://api.openai.com/v1",
+  apiKey: "",
+  model: "gpt-4o-mini",
+  chatEnabled: true,
+  dialogueEnabled: true,
+  proactiveEnabled: false,
+  weatherEnabled: true,
+  jokeEnabled: true,
+  newsEnabled: true,
+  weatherCity: "北京",
+  weatherHour: 9,
+  jokeIntervalMinutes: 90,
+  newsIntervalMinutes: 180,
 };
 
 export type AppState = {
@@ -127,6 +177,7 @@ export type AppState = {
   careRevision?: number;
   settings: Settings;
   shopCatalog: ShopProduct[];
+  chatHistory?: ChatMessage[];
 };
 
 export type SkinPalette = {

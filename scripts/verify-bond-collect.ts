@@ -83,9 +83,9 @@ check(weekRewardPreview().length === 7, "week preview length 7");
 check(DAILY_PET_ALREADY_OWNED_COIN === 80, "owned-pet fallback coin 80");
 
 check(DAILY_BOND_CAP === 30, "daily bond cap 30");
-check(CHECKIN_ENERGY_COST === 12, "check-in energy 12");
-check(INTERACT_ENERGY_COST.play === 8, "play costs 8 energy");
-check(INTERACT_ENERGY_COST.feed === 0, "feed restores energy");
+check(CHECKIN_ENERGY_COST === 0, "energy system removed (check-in cost 0)");
+check(INTERACT_ENERGY_COST.play === 0, "energy system removed (play cost 0)");
+check(INTERACT_ENERGY_COST.feed === 0, "energy system removed (feed cost 0)");
 
 if (failures) {
   console.error(`\n${failures} check(s) failed`);

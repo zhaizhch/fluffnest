@@ -53,16 +53,31 @@ function paint(
   drawH: number,
 ) {
   if (!canvas) return;
-  const ctx = canvas.getContext("2d", { alpha: true });
+  // Reuse the same 2d context — recreating every frame is expensive.
+  let ctx = (canvas as HTMLCanvasElement & {
+    __petCtx?: CanvasRenderingContext2D | null;
+  }).__petCtx;
+  if (!ctx) {
+    ctx = canvas.getContext("2d", { alpha: true });
+    (canvas as HTMLCanvasElement & {
+      __petCtx?: CanvasRenderingContext2D | null;
+    }).__petCtx = ctx;
+  }
   if (!ctx) return;
   const { row, frames } = resolveAnim(anim, version);
   const col = ((frame % frames) + frames) % frames;
   if (canvas.width !== drawW || canvas.height !== drawH) {
     canvas.width = drawW;
     canvas.height = drawH;
+    // resizing clears the cached context binding on some engines
+    ctx = canvas.getContext("2d", { alpha: true });
+    (canvas as HTMLCanvasElement & {
+      __petCtx?: CanvasRenderingContext2D | null;
+    }).__petCtx = ctx;
+    if (!ctx) return;
   }
   ctx.clearRect(0, 0, drawW, drawH);
-  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingEnabled = false;
   ctx.drawImage(
     img,
     col * FRAME_W,
@@ -124,11 +139,20 @@ export function PixiPet({
     };
   }, [face.src, face.spriteVersionNumber, drawW, drawH]);
 
+  // Reset frame when the atlas row changes, without tearing down the timer.
+  useEffect(() => {
+    if (status !== "ready" || isIdle) return;
+    const img = imgRef.current;
+    const canvas = canvasRef.current;
+    if (!img || !canvas) return;
+    frameRef.current = 0;
+    paint(canvas, img, versionRef.current, animRef.current, 0, drawW, drawH);
+  }, [anim, status, isIdle, drawW, drawH]);
+
   /**
-   * Idle: hold eyes-open (frame 0) ~1.4–2.1s, then play one idle atlas cycle
-   * (Codex sheets bake blink into the idle row), then hold again.
+   * Idle: hold eyes-open (frame 0) ~1.4–2.1s, then play one idle atlas cycle.
    * Soft hops / walks are driven by PetApp, not this loop.
-   * Other behaviors: normal loop.
+   * Interval only restarts on idle↔action mode switch — not every behavior tick.
    */
   useEffect(() => {
     if (status !== "ready") return;
@@ -138,7 +162,7 @@ export function PixiPet({
 
     if (!isIdle) {
       frameRef.current = 0;
-      paint(canvas, img, versionRef.current, anim, 0, drawW, drawH);
+      paint(canvas, img, versionRef.current, animRef.current, 0, drawW, drawH);
       const id = window.setInterval(() => {
         const sheet = imgRef.current;
         const c = canvasRef.current;
@@ -174,7 +198,6 @@ export function PixiPet({
 
       if (phase === "hold") {
         if (now < holdUntil) {
-          // stay on open-eye frame
           if (frameRef.current !== 0) {
             frameRef.current = 0;
             paint(c, sheet, versionRef.current, "idle", 0, drawW, drawH);
@@ -185,7 +208,6 @@ export function PixiPet({
         frameRef.current = 0;
       }
 
-      // blink / micro-idle: advance through idle row once
       frameRef.current += 1;
       if (frameRef.current >= frames) {
         phase = "hold";
@@ -206,7 +228,7 @@ export function PixiPet({
     }, BLINK_FRAME_MS);
 
     return () => window.clearInterval(id);
-  }, [status, drawW, drawH, anim, isIdle, behavior]);
+  }, [status, drawW, drawH, isIdle]);
 
   const mirror = facing === "left" && anim !== "runningLeft";
 

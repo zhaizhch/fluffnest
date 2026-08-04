@@ -28,6 +28,16 @@ html.pet-window #root {
   cursor: grabbing;
 }
 
+.pet-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
 .bubble {
   max-width: 160px;
   margin-bottom: 6px;
@@ -43,6 +53,593 @@ html.pet-window #root {
   animation: pop 0.28s ease;
   pointer-events: none;
   z-index: 5;
+}
+
+@keyframes pop {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* —— Care alert (water / stretch): big banner + roam —— */
+.pet-root.care-alerting {
+  cursor: pointer;
+}
+
+.care-alert {
+  position: relative;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(340px, 92%);
+  margin: 0 auto 10px;
+  padding: 12px 14px 12px 12px;
+  border-radius: 18px;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 252, 248, 0.98),
+    rgba(255, 248, 240, 0.94)
+  );
+  border: 2px solid color-mix(in srgb, var(--care-accent, #6eb5c0) 55%, transparent);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--care-accent, #6eb5c0) 18%, transparent),
+    0 16px 36px rgba(30, 20, 10, 0.18);
+  animation: care-alert-in 0.45s cubic-bezier(0.22, 1.2, 0.36, 1);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.care-alert-water {
+  --care-accent: #6eb5c0;
+}
+
+.care-alert-stretch {
+  --care-accent: #d4a06a;
+}
+
+.care-alert-glow {
+  position: absolute;
+  inset: -40% -20%;
+  background: radial-gradient(
+    circle at 30% 40%,
+    color-mix(in srgb, var(--care-accent, #6eb5c0) 35%, transparent),
+    transparent 55%
+  );
+  animation: care-glow 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.care-alert-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  font-size: 26px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--care-accent, #6eb5c0) 22%, #fff);
+  animation: care-bounce 1.1s ease-in-out infinite;
+}
+
+.care-alert-copy {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.care-alert-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+  color: #2a2218;
+}
+
+.care-alert-sub {
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(42, 34, 24, 0.72);
+}
+
+.care-alert-hint {
+  margin-top: 2px;
+  font-size: 10px;
+  opacity: 0.45;
+}
+
+.pet-root.care-alerting .figure-wrap {
+  animation: care-pet-pulse 0.9s ease-in-out infinite;
+}
+
+.pet-root.care-alerting.care-dancing .figure-wrap {
+  /* Pose keyframes below replace the generic pulse */
+  animation: none;
+}
+
+.pet-root.care-alerting .name-tag {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+/* —— Care dance choreography (pose classes override generic bob) —— */
+.pet-root.care-dancing .figure-wrap {
+  transform-origin: 50% 88%;
+  will-change: transform;
+}
+
+.pet-root.care-dancing.care-pose-prelude .figure-wrap {
+  animation: care-pose-prelude 2.4s cubic-bezier(0.37, 0, 0.63, 1) both;
+}
+
+.pet-root.care-dancing.care-pose-sway .figure-wrap {
+  animation: care-pose-sway 2.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.pet-root.care-dancing.care-pose-glide .figure-wrap {
+  animation: care-pose-glide 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.pet-root.care-dancing.care-pose-turn .figure-wrap {
+  animation: care-pose-turn 2.1s cubic-bezier(0.4, 0.05, 0.2, 1) both;
+}
+
+.pet-root.care-dancing.care-pose-lift .figure-wrap {
+  animation: care-pose-lift 1.45s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+.pet-root.care-dancing.care-pose-ripple .figure-wrap {
+  animation: care-pose-ripple 2.1s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.pet-root.care-dancing.care-pose-flourish .figure-wrap {
+  animation: care-pose-flourish 1.9s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+.pet-root.care-dancing.care-pose-spark .figure-wrap {
+  animation: care-pose-spark 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.pet-root.care-dancing.care-pose-bow .figure-wrap {
+  animation: care-pose-bow 2.6s cubic-bezier(0.37, 0, 0.63, 1) both;
+}
+
+/* Soft trail sparkles during flourish / spark */
+.pet-root.care-dancing.care-pose-flourish .fx-sparkle,
+.pet-root.care-dancing.care-pose-spark .fx-sparkle {
+  opacity: 1 !important;
+}
+
+.pet-root.care-dancing .pixi-pet,
+.pet-root.care-dancing .soft-pet {
+  animation: none !important;
+}
+
+@keyframes care-pose-prelude {
+  0% {
+    transform: translateY(6px) scale(0.97);
+    opacity: 0.85;
+  }
+  40% {
+    transform: translateY(-3px) scale(1.015) rotate(-1.5deg);
+  }
+  100% {
+    transform: translateY(0) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes care-pose-sway {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translateX(-7px) rotate(-4deg) scale(1.015);
+  }
+  50% {
+    transform: translateX(0) rotate(0deg) scale(1.025);
+  }
+  75% {
+    transform: translateX(7px) rotate(4deg) scale(1.015);
+  }
+}
+
+@keyframes care-pose-glide {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1.5deg) scale(1);
+  }
+  50% {
+    transform: translateY(-6px) rotate(1.5deg) scale(1.02);
+  }
+}
+
+@keyframes care-pose-turn {
+  0% {
+    transform: rotate(0deg) scale(1) translateY(0);
+  }
+  30% {
+    transform: rotate(-12deg) scale(1.03) translateY(-4px);
+  }
+  70% {
+    transform: rotate(220deg) scale(1.015) translateY(-2px);
+  }
+  100% {
+    transform: rotate(360deg) scale(1) translateY(0);
+  }
+}
+
+@keyframes care-pose-lift {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  45% {
+    transform: translateY(-12px) scale(0.985, 1.03);
+  }
+  60% {
+    transform: translateY(-14px) scale(1.02, 0.985);
+  }
+}
+
+@keyframes care-pose-ripple {
+  0%,
+  100% {
+    transform: scaleX(1) skewX(0deg) translateY(0);
+  }
+  30% {
+    transform: scaleX(1.035) skewX(-2.5deg) translateY(-3px);
+  }
+  60% {
+    transform: scaleX(0.98) skewX(2.5deg) translateY(-1px);
+  }
+}
+
+@keyframes care-pose-flourish {
+  0%,
+  100% {
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-8px) scale(1.04) rotate(-3deg);
+  }
+  55% {
+    transform: translateY(-4px) scale(1.06) rotate(2.5deg);
+  }
+  80% {
+    transform: translateY(-9px) scale(1.03) rotate(-1.5deg);
+  }
+}
+
+@keyframes care-pose-spark {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    filter: brightness(1);
+  }
+  50% {
+    transform: translateY(-7px) scale(1.04);
+    filter: brightness(1.08);
+  }
+}
+
+@keyframes care-pose-bow {
+  0% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  40% {
+    transform: translateY(6px) rotate(8deg) scale(0.985);
+  }
+  60% {
+    transform: translateY(7px) rotate(9deg) scale(0.98);
+  }
+  100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes care-alert-in {
+  from {
+    transform: translateY(18px) scale(0.92);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes care-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes care-bounce {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(4deg);
+  }
+}
+
+@keyframes care-pet-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+/* —— Right-click quick menu (right of pet) —— */
+.pet-root.menu-open {
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  cursor: default;
+}
+
+.pet-root.menu-open .pet-main {
+  width: 240px;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.quick-menu {
+  width: 220px;
+  flex: 0 0 auto;
+  margin: 0 0 28px;
+  padding: 10px;
+  border-radius: 16px;
+  background:
+    linear-gradient(160deg, rgba(255, 252, 247, 0.96), rgba(244, 236, 226, 0.94));
+  border: 1px solid rgba(90, 70, 50, 0.1);
+  box-shadow:
+    0 14px 36px rgba(40, 28, 16, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  animation: quick-in 0.22s ease;
+  z-index: 20;
+  cursor: default;
+  align-self: center;
+}
+
+@keyframes quick-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.quick-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid rgba(90, 70, 50, 0.08);
+  color: #8a7468;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.quick-menu-close {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(90, 70, 50, 0.06);
+  color: #6a564c;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.quick-menu-close:hover {
+  background: rgba(90, 70, 50, 0.12);
+}
+
+.quick-menu-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: #3d3229;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.quick-menu-item:hover:not(:disabled) {
+  background: rgba(196, 164, 132, 0.22);
+  transform: translateX(2px);
+}
+
+.quick-menu-item:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.quick-menu-item strong {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.quick-menu-item small {
+  font-size: 10px;
+  color: #8a7468;
+}
+
+.quick-menu-chat {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(90, 70, 50, 0.08);
+}
+
+.quick-menu-chat input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(90, 70, 50, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  color: #3d3229;
+  font-size: 12px;
+  outline: none;
+}
+
+.quick-menu-chat input:focus {
+  border-color: rgba(196, 164, 132, 0.7);
+  box-shadow: 0 0 0 3px rgba(196, 164, 132, 0.18);
+}
+
+.quick-menu-send {
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: #c4a484;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.quick-menu-send:hover:not(:disabled) {
+  background: #b89572;
+}
+
+.quick-menu-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.quick-menu-send.block {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.quick-remind {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.quick-remind-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.quick-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px;
+  border: 1px solid rgba(90, 70, 50, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #3d3229;
+  cursor: pointer;
+  text-align: left;
+}
+
+.quick-chip:hover:not(:disabled) {
+  background: rgba(196, 164, 132, 0.22);
+  border-color: rgba(196, 164, 132, 0.45);
+}
+
+.quick-chip:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.quick-chip small {
+  font-size: 10px;
+  color: #8a7468;
+}
+
+.quick-meeting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(90, 70, 50, 0.08);
+}
+
+.quick-meeting label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: #8a7468;
+}
+
+.quick-meeting input {
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(90, 70, 50, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+  color: #3d3229;
+  font-size: 12px;
+}
+
+.quick-back {
+  border: none;
+  background: transparent;
+  color: #8a7468;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.quick-back:hover:not(:disabled) {
+  color: #3d3229;
 }
 
 @keyframes pop {

@@ -91,12 +91,102 @@ pub struct DailyReward {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyCare {
-    /// Local calendar day `YYYY-MM-DD` for bond/energy daily counters.
+    /// Local calendar day `YYYY-MM-DD` for bond daily counters.
     #[serde(default)]
     pub date: String,
     /// Bond gained today (capped by DAILY_BOND_CAP).
     #[serde(default)]
     pub bond_gained: i32,
+}
+
+fn default_api_base() -> String {
+    "https://api.openai.com/v1".into()
+}
+fn default_model() -> String {
+    "gpt-4o-mini".into()
+}
+fn default_city() -> String {
+    "北京".into()
+}
+fn default_weather_hour() -> u32 {
+    9
+}
+fn default_joke_interval() -> i32 {
+    90
+}
+fn default_news_interval() -> i32 {
+    180
+}
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmSettings {
+    /// Master switch — API calls only when true.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_api_base")]
+    pub api_base: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// Panel chat with the active pet.
+    #[serde(default = "default_true")]
+    pub chat_enabled: bool,
+    /// Generate click / idle / reminder bubbles via LLM.
+    #[serde(default = "default_true")]
+    pub dialogue_enabled: bool,
+    /// Weather / joke / news proactive pushes.
+    #[serde(default)]
+    pub proactive_enabled: bool,
+    #[serde(default = "default_true")]
+    pub weather_enabled: bool,
+    #[serde(default = "default_true")]
+    pub joke_enabled: bool,
+    #[serde(default = "default_true")]
+    pub news_enabled: bool,
+    #[serde(default = "default_city")]
+    pub weather_city: String,
+    /// Local hour (0–23) to greet with weather once per day.
+    #[serde(default = "default_weather_hour")]
+    pub weather_hour: u32,
+    #[serde(default = "default_joke_interval")]
+    pub joke_interval_minutes: i32,
+    #[serde(default = "default_news_interval")]
+    pub news_interval_minutes: i32,
+    #[serde(default)]
+    pub last_weather_date: Option<String>,
+    #[serde(default)]
+    pub last_joke_at: Option<String>,
+    #[serde(default)]
+    pub last_news_at: Option<String>,
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_base: default_api_base(),
+            api_key: String::new(),
+            model: default_model(),
+            chat_enabled: true,
+            dialogue_enabled: true,
+            proactive_enabled: false,
+            weather_enabled: true,
+            joke_enabled: true,
+            news_enabled: true,
+            weather_city: default_city(),
+            weather_hour: default_weather_hour(),
+            joke_interval_minutes: default_joke_interval(),
+            news_interval_minutes: default_news_interval(),
+            last_weather_date: None,
+            last_joke_at: None,
+            last_news_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +198,8 @@ pub struct Settings {
     /// Dev-only full unlock. Default false — never auto-claim login gifts.
     #[serde(default)]
     pub is_admin: bool,
+    #[serde(default)]
+    pub llm: LlmSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +220,9 @@ pub struct AppState {
     pub care_revision: i32,
     pub settings: Settings,
     pub shop_catalog: Vec<ShopProduct>,
+    /// Recent chat turns with the active pet (persisted).
+    #[serde(default)]
+    pub chat_history: Vec<crate::llm::ChatMessage>,
 }
 
 fn today_local() -> String {
@@ -279,8 +374,10 @@ impl Default for AppState {
                 focus_mode: false,
                 always_on_top: true,
                 is_admin: false,
+                llm: LlmSettings::default(),
             },
             shop_catalog: default_shop_catalog(),
+            chat_history: Vec::new(),
         }
     }
 }
@@ -329,8 +426,6 @@ pub fn grant_admin_unlocks(state: &mut AppState) {
 
 /// Daily bond gain cap (interact + reminder check-in).
 pub const DAILY_BOND_CAP: i32 = 30;
-/// Reminder / daily check-in energy cost.
-pub const CHECKIN_ENERGY_COST: i32 = 12;
 
 pub fn sync_daily_care(state: &mut AppState) {
     let today = today_local();
@@ -350,20 +445,6 @@ pub fn take_bond_budget(state: &mut AppState, want: i32) -> i32 {
     let gained = want.min(room);
     state.daily_care.bond_gained += gained;
     gained
-}
-
-pub fn spend_energy(pet: &mut PetInstance, cost: i32) -> Result<(), String> {
-    if cost <= 0 {
-        return Ok(());
-    }
-    if pet.energy < cost {
-        return Err(format!(
-            "体力不足（需要 {}，当前 {}）",
-            cost, pet.energy
-        ));
-    }
-    pet.energy -= cost;
-    Ok(())
 }
 
 fn default_shop_catalog() -> Vec<ShopProduct> {
