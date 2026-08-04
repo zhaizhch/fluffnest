@@ -21,6 +21,7 @@
   <header class="top">
     <a class="logo" href="/">绒窝 <span>FluffNest</span></a>
     <nav>
+      <a href="#try">试玩</a>
       <a href="#features">功能</a>
       <a href="#install">安装</a>
       <a href="#support">支持</a>
@@ -40,14 +41,46 @@
           可接入大模型按性格聊天；喝水 / 久坐时跳段编舞，并用神经语音轮换提醒——轻陪伴，不打扰。
         </p>
         <div class="cta">
-          <a class="btn primary" href="https://github.com/zhaizhch/fluffnest/releases/latest" target="_blank" rel="noopener">下载最新版</a>
-          <a class="btn ghost" href="https://github.com/zhaizhch/fluffnest" target="_blank" rel="noopener">查看源码</a>
+          <a class="btn primary" href="#try">浏览器试玩</a>
+          <a class="btn ghost" href="https://github.com/zhaizhch/fluffnest/releases/latest" target="_blank" rel="noopener">下载最新版</a>
         </div>
-        <p class="fine">仅限 macOS 12+ · 个人免费 · <strong>禁止商用</strong></p>
+        <p class="fine">试玩无需 API Key · 完整版仅限 macOS 12+ · 个人免费 · <strong>禁止商用</strong></p>
       </div>
       <div class="hero-visual">
         <img src="/assets/demo-preview.gif" alt="暖卡卡桌面宠物预览动图" width="448" height="432" />
       </div>
+    </section>
+
+    <section id="try" class="section try-section">
+      <h2>先在网页里摸一摸</h2>
+      <p class="section-lead">
+        纯前端试玩：眨眼、蹦跳、点击台词都是本地的，不上传数据、不需要 API Key。
+        天气 / 新闻 / AI 对话等完整能力请下载 macOS 版，在本地配置你自己的密钥。
+      </p>
+      <div class="try-frame-wrap">
+        <iframe
+          class="try-frame"
+          title="绒窝网页试玩"
+          src="/try/?embed=1"
+          loading="lazy"
+          referrerpolicy="no-referrer-when-downgrade"
+        ></iframe>
+      </div>
+      <p class="try-actions">
+        <a class="btn ghost" href="/try/" target="_blank" rel="noopener">打开完整试玩页</a>
+        <a class="btn primary" href="https://github.com/zhaizhch/fluffnest/releases/latest" target="_blank" rel="noopener">下载 macOS 版</a>
+      </p>
+      <details class="try-embed-help">
+        <summary>嵌到个人博客</summary>
+        <pre class="try-embed-code">&lt;iframe
+  src="https://virtualpet.beer/try/?embed=1"
+  width="320"
+  height="360"
+  style="border:0;background:transparent;max-width:100%"
+  loading="lazy"
+  title="绒窝试玩"
+&gt;&lt;/iframe&gt;</pre>
+      </details>
     </section>
 
     <section id="features" class="section features">

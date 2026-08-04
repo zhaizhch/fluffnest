@@ -213,6 +213,62 @@ nav a:hover { color: var(--ink); }
   color: var(--muted);
 }
 
+.try-section .section-lead {
+  max-width: 56ch;
+}
+
+.try-frame-wrap {
+  max-width: 420px;
+  margin: 0 auto;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(ellipse 70% 50% at 30% 0%, #efe0cf 0%, transparent 55%),
+    var(--card);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.try-frame {
+  display: block;
+  width: 100%;
+  height: 360px;
+  border: 0;
+  background: transparent;
+}
+
+.try-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin: 18px 0 0;
+}
+
+.try-embed-help {
+  margin: 22px auto 0;
+  max-width: 560px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.try-embed-help summary {
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.try-embed-code {
+  margin: 10px 0 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 250, 244, 0.9);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
 .demo-grid {
   display: grid;
   gap: 18px;

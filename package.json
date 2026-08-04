@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:go": "bash scripts/build-go-sidecar.sh",
+    "demo:dev": "vite demo.html --port 1422 --strictPort",
+    "demo:build": "bash scripts/build-web-demo.sh",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "npm run build:go && tauri dev",
