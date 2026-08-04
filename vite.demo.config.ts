@@ -12,10 +12,10 @@ const targets = {
     publicBase: "",
   },
   pages: {
-    base: "/fluffnest/",
-    outDir: "dist-pages",
-    // GitHub Pages project site: https://zhaizhch.github.io/fluffnest/
-    publicBase: "/fluffnest",
+    // Relative base works on GitHub Pages + jsDelivr without hard-coding the host.
+    base: "./",
+    outDir: "docs/web-demo",
+    publicBase: ".",
   },
 } as const;
 
@@ -23,13 +23,12 @@ const cfg = targets[target];
 
 process.env.VITE_PUBLIC_BASE = cfg.publicBase;
 
-/** Static web try-on — site (/try/) or GitHub Pages (/fluffnest/). */
+/** Static web try-on — site (/try/) or portable GitHub demo (./). */
 export default defineConfig({
   plugins: [react()],
   base: cfg.base,
   publicDir: false,
   define: {
-    // Force-inject so spriteFor() can prefix /pets on GitHub Pages.
     __FN_ASSET_BASE__: JSON.stringify(cfg.publicBase),
   },
   build: {
