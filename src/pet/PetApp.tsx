@@ -84,6 +84,12 @@ function bubbleDisplayMs(
   return Math.min(max, Math.max(min, byLen));
 }
 
+/** Empty / flaky LLM — keep local fallback, never surface the error as a bubble. */
+function isSoftLlmFail(err: unknown): boolean {
+  const msg = String(err ?? "");
+  return /空内容|empty|timeout|超时|网络|429|502|503|504|abort/i.test(msg);
+}
+
 export function PetApp() {
   const [pet, setPet] = useState<PetInstance | null>(null);
   const [behavior, setBehavior] = useState<PetBehavior>("idle");
@@ -309,14 +315,16 @@ export function PetApp() {
                   Math.max(holdMs, bubbleDisplayMs(line.trim())),
                 );
               }
+              // Empty success: keep local fallback bubble (do not clear / complain).
             })
             .catch((err) => {
               if (req !== llmReqId.current) return;
               console.error("generatePetLine failed", err);
-              // Keep fallback bubble; briefly hint failure
+              // Soft fail: keep fallback. Never replace it with "空内容" / "AI 暂时没回上".
+              if (fallback || isSoftLlmFail(err)) return;
               showBubble(
                 String(err).replace(/^.*Error:\s*/i, "").slice(0, 36) ||
-                  (fallback ?? "AI 暂时没回上"),
+                  "AI 暂时没回上",
                 4000,
               );
             });
@@ -1118,10 +1126,11 @@ export function PetApp() {
             .catch((err) => {
               if (req !== llmReqId.current) return;
               console.error(err);
-              showBubble(
-                String(err).replace(/^.*Error:\s*/i, "").slice(0, 36) || "AI 暂时没回上",
-                4000,
-              );
+              // Soft fail — leave rising animation / local bubble alone.
+              if (isSoftLlmFail(err)) return;
+              const local =
+                pickBubble(speciesId, "idle") ?? pickClingyLine() ?? null;
+              if (local) showBubble(local, bubbleDisplayMs(local));
             });
         }
         try {

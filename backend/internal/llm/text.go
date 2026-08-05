@@ -6,7 +6,11 @@ import (
 	"unicode"
 )
 
-var thinkTagRe = regexp.MustCompile(`(?is)<(?:think|thinking|reasoning|thought|redacted_reasoning)>.*?</(?:think|thinking|reasoning|thought|redacted_reasoning)>`)
+var (
+	thinkTagRe = regexp.MustCompile(`(?is)<(?:think|thinking|reasoning|thought|redacted_reasoning)>.*?</(?:think|thinking|reasoning|thought|redacted_reasoning)>`)
+	// Unclosed think blocks (common when max_tokens cuts mid-reasoning).
+	thinkOpenRe = regexp.MustCompile(`(?is)<(?:think|thinking|reasoning|thought|redacted_reasoning)>[\s\S]*$`)
+)
 
 func TruncateChars(s string, max int) string {
 	r := []rune(s)
@@ -18,6 +22,7 @@ func TruncateChars(s string, max int) string {
 
 func StripThinking(raw string) string {
 	cleaned := thinkTagRe.ReplaceAllString(raw, "")
+	cleaned = thinkOpenRe.ReplaceAllString(cleaned, "")
 	var lines []string
 	for _, line := range strings.Split(cleaned, "\n") {
 		t := strings.ToLower(strings.TrimSpace(line))
@@ -32,8 +37,47 @@ func StripThinking(raw string) string {
 	return strings.Join(lines, "\n")
 }
 
+// RecoverSpeakable pulls a short speakable line when StripThinking wiped everything
+// (e.g. reply sits after a closed think block that the model truncated oddly).
+func RecoverSpeakable(raw string) string {
+	t := strings.TrimSpace(StripThinking(raw))
+	if t == "" {
+		// Closed tags removed mid-string; keep text after the last close tag.
+		lower := strings.ToLower(raw)
+		for _, close := range []string{
+			"</think>", "</thinking>", "</reasoning>", "</thought>", "</redacted_reasoning>",
+		} {
+			if i := strings.LastIndex(lower, close); i >= 0 {
+				t = strings.TrimSpace(raw[i+len(close):])
+				break
+			}
+		}
+	}
+	t = strings.TrimSpace(StripThinking(t))
+	if t == "" {
+		return ""
+	}
+	// Prefer the last non-empty line — replies often trail after reasoning prose.
+	parts := strings.Split(t, "\n")
+	for i := len(parts) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(parts[i])
+		if line == "" {
+			continue
+		}
+		low := strings.ToLower(line)
+		if strings.HasPrefix(low, "thinking") || strings.HasPrefix(low, "reasoning") {
+			continue
+		}
+		return line
+	}
+	return t
+}
+
 func CleanLine(raw string, max int) string {
-	t := strings.TrimSpace(raw)
+	t := strings.TrimSpace(StripThinking(raw))
+	if t == "" {
+		t = RecoverSpeakable(raw)
+	}
 	for _, wrap := range []string{`"`, `'`, "「", "」", "“", "”"} {
 		t = strings.Trim(t, wrap)
 	}
@@ -59,6 +103,9 @@ func CleanWechatReply(raw string, max int) string {
 // CleanWeatherLine keeps short multi-sentence weather advice (allows newlines → spaces).
 func CleanWeatherLine(raw string, max int) string {
 	t := strings.TrimSpace(StripThinking(raw))
+	if t == "" {
+		t = RecoverSpeakable(raw)
+	}
 	t = strings.ReplaceAll(t, "\r\n", "\n")
 	t = strings.Join(strings.Fields(strings.ReplaceAll(t, "\n", " ")), " ")
 	for _, wrap := range []string{`"`, `'`, "「", "」", "“", "”"} {

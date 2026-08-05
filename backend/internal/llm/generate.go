@@ -130,10 +130,16 @@ func (c *Client) GenerateBubble(ctx context.Context, llm types.LlmSettings, pet 
 	if err != nil {
 		return "", err
 	}
+	var line string
 	if kind == "weather" {
-		return CleanWeatherLine(raw, maxChars), nil
+		line = CleanWeatherLine(raw, maxChars)
+	} else {
+		line = CleanLine(raw, maxChars)
 	}
-	return CleanLine(raw, maxChars), nil
+	if strings.TrimSpace(line) == "" {
+		return "", fmt.Errorf("LLM 返回空内容")
+	}
+	return line, nil
 }
 
 func (c *Client) GenerateChat(ctx context.Context, llm types.LlmSettings, pet types.PetInstance, history []types.ChatMessage, userMessage string) (string, error) {
@@ -156,7 +162,14 @@ func (c *Client) GenerateChat(ctx context.Context, llm types.LlmSettings, pet ty
 	if err != nil {
 		return "", err
 	}
-	return CleanLine(raw, MaxChatChars), nil
+	line := CleanLine(raw, MaxChatChars)
+	if strings.TrimSpace(line) == "" {
+		if recovered := CleanLine(RecoverSpeakable(raw), MaxChatChars); recovered != "" {
+			return recovered, nil
+		}
+		return "", fmt.Errorf("LLM 返回空内容")
+	}
+	return line, nil
 }
 
 func (c *Client) GenerateFortune(ctx context.Context, llm types.LlmSettings, pet types.PetInstance, dateLabel, weekday, city string, weather *string) (string, error) {

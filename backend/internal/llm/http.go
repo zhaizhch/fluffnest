@@ -4,14 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fluffnest/deskpet/backend/internal/types"
+)
+
+const (
+	// Transient LLM failures (timeouts, 429, 5xx) get a few quick retries.
+	llmMaxAttempts = 3
+	llmRetryBase   = 280 * time.Millisecond
 )
 
 const (
@@ -55,13 +63,14 @@ type CompletionOpts struct {
 }
 
 func BubbleOpts() CompletionOpts {
-	return CompletionOpts{MaxTokens: 64, Timeout: 12 * time.Second, Temperature: 0.7}
+	// Thinking models often burn the budget on reasoning; leave headroom for the line.
+	return CompletionOpts{MaxTokens: 160, Timeout: 14 * time.Second, Temperature: 0.7}
 }
 func WeatherOpts() CompletionOpts {
-	return CompletionOpts{MaxTokens: 160, Timeout: 12 * time.Second, Temperature: 0.7}
+	return CompletionOpts{MaxTokens: 220, Timeout: 14 * time.Second, Temperature: 0.7}
 }
 func ChatOpts() CompletionOpts {
-	return CompletionOpts{MaxTokens: 120, Timeout: 15 * time.Second, Temperature: 0.75}
+	return CompletionOpts{MaxTokens: 220, Timeout: 18 * time.Second, Temperature: 0.75}
 }
 func CareVoiceOpts() CompletionOpts {
 	return CompletionOpts{MaxTokens: 320, Timeout: 18 * time.Second, Temperature: 0.85}
@@ -148,6 +157,21 @@ type chatCompletionResponse struct {
 	} `json:"choices"`
 }
 
+func extractMessageContent(content *string) string {
+	if content == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(*content)
+	if raw == "" {
+		return ""
+	}
+	cleaned := strings.TrimSpace(StripThinking(raw))
+	if cleaned != "" {
+		return cleaned
+	}
+	return strings.TrimSpace(RecoverSpeakable(raw))
+}
+
 func (c *Client) ChatCompletion(ctx context.Context, llm types.LlmSettings, messages []map[string]string, opts CompletionOpts) (string, error) {
 	msgs := make([]ChatMessage, 0, len(messages))
 	for _, m := range messages {
@@ -161,6 +185,71 @@ func (c *Client) ChatCompletion(ctx context.Context, llm types.LlmSettings, mess
 		return "", fmt.Errorf("LLM 返回空内容")
 	}
 	return res.Content, nil
+}
+
+func isRetryableHTTPStatus(code int) bool {
+	switch code {
+	case 408, 409, 425, 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRetryableNetErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	// Deadline from the overall call budget — don't burn another attempt.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"timeout", "timed out", "connection reset", "connection refused",
+		"temporary failure", "tls handshake", "eof", "broken pipe",
+		"i/o timeout", "no such host", "server closed idle connection",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func retryAfterDelay(resp *http.Response, attempt int) time.Duration {
+	base := llmRetryBase * time.Duration(1<<attempt) // 280ms, 560ms, …
+	if resp == nil {
+		return base
+	}
+	if ra := strings.TrimSpace(resp.Header.Get("Retry-After")); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+			d := time.Duration(secs) * time.Second
+			if d > 3*time.Second {
+				d = 3 * time.Second
+			}
+			return d
+		}
+	}
+	return base
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // ChatCompletionEx supports optional tools / tool_choice (string or object).
@@ -181,75 +270,129 @@ func (c *Client) ChatCompletionEx(
 	defer cancel()
 
 	var lastErr error
-	// Clean body first — thinking-disable flags often 400 on some gateways and
-	// used to waste a full RTT before the real request.
-	for _, withFlags := range []bool{false, true} {
-		body := map[string]any{
-			"model":       llm.Model,
-			"messages":    messages,
-			"temperature": opts.Temperature,
-			"max_tokens":  opts.MaxTokens,
-			"stream":      false,
-		}
-		if len(tools) > 0 {
-			body["tools"] = tools
-			if toolChoice == nil || toolChoice == "" {
-				body["tool_choice"] = "auto"
-			} else {
-				body["tool_choice"] = toolChoice
+	nextDelay := time.Duration(0)
+	maxTokens := opts.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 160
+	}
+	for attempt := 0; attempt < llmMaxAttempts; attempt++ {
+		if attempt > 0 {
+			if err := sleepCtx(ctx, nextDelay); err != nil {
+				if lastErr != nil {
+					return zero, lastErr
+				}
+				return zero, err
 			}
 		}
-		if withFlags {
-			body["enable_thinking"] = false
-			body["thinking"] = map[string]any{"type": "disabled"}
-			body["reasoning"] = map[string]any{"effort": "none", "exclude": true}
-			body["reasoning_effort"] = "minimal"
-			body["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
-		}
-		payload, err := json.Marshal(body)
-		if err != nil {
-			return zero, err
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-		if err != nil {
-			return zero, err
-		}
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(llm.APIKey))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
 
-		resp, err := c.http.Do(req)
-		if err != nil {
-			return zero, fmt.Errorf("网络错误: %w", err)
-		}
-		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return zero, readErr
-		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			var parsed chatCompletionResponse
-			if err := json.Unmarshal(raw, &parsed); err != nil {
-				return zero, fmt.Errorf("解析 LLM 响应失败: %w", err)
+		// Clean body first — thinking-disable flags often 400 on some gateways and
+		// used to waste a full RTT before the real request.
+		retryTransient := false
+		for _, withFlags := range []bool{false, true} {
+			body := map[string]any{
+				"model":       llm.Model,
+				"messages":    messages,
+				"temperature": opts.Temperature,
+				"max_tokens":  maxTokens,
+				"stream":      false,
 			}
-			if len(parsed.Choices) == 0 {
-				return zero, fmt.Errorf("LLM 返回空内容")
+			if len(tools) > 0 {
+				body["tools"] = tools
+				if toolChoice == nil || toolChoice == "" {
+					body["tool_choice"] = "auto"
+				} else {
+					body["tool_choice"] = toolChoice
+				}
 			}
-			msg := parsed.Choices[0].Message
-			content := ""
-			if msg.Content != nil {
-				content = strings.TrimSpace(StripThinking(*msg.Content))
+			if withFlags {
+				body["enable_thinking"] = false
+				body["thinking"] = map[string]any{"type": "disabled"}
+				body["reasoning"] = map[string]any{"effort": "none", "exclude": true}
+				body["reasoning_effort"] = "minimal"
+				body["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
 			}
-			return CompletionResult{
-				Content:   content,
-				ToolCalls: msg.ToolCalls,
-				Raw:       parsed,
-			}, nil
-		}
-		lastErr = fmt.Errorf("LLM 请求失败 (%d): %s", resp.StatusCode, TruncateChars(string(raw), 180))
-		// Tool schema rejected by some gateways → retry without thinking flags only helps 400/422.
-		if resp.StatusCode != 400 && resp.StatusCode != 422 {
+			payload, err := json.Marshal(body)
+			if err != nil {
+				return zero, err
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+			if err != nil {
+				return zero, err
+			}
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(llm.APIKey))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json")
+
+			resp, err := c.http.Do(req)
+			if err != nil {
+				lastErr = fmt.Errorf("网络错误: %w", err)
+				if isRetryableNetErr(err) && attempt+1 < llmMaxAttempts {
+					nextDelay = retryAfterDelay(nil, attempt)
+					retryTransient = true
+					break
+				}
+				return zero, lastErr
+			}
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			_ = resp.Body.Close()
+			if readErr != nil {
+				lastErr = readErr
+				if isRetryableNetErr(readErr) && attempt+1 < llmMaxAttempts {
+					nextDelay = retryAfterDelay(nil, attempt)
+					retryTransient = true
+					break
+				}
+				return zero, readErr
+			}
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				var parsed chatCompletionResponse
+				if err := json.Unmarshal(raw, &parsed); err != nil {
+					return zero, fmt.Errorf("解析 LLM 响应失败: %w", err)
+				}
+				if len(parsed.Choices) == 0 {
+					lastErr = fmt.Errorf("LLM 返回空内容")
+					if attempt+1 < llmMaxAttempts {
+						nextDelay = retryAfterDelay(nil, attempt)
+						retryTransient = true
+						break
+					}
+					return zero, lastErr
+				}
+				msg := parsed.Choices[0].Message
+				content := extractMessageContent(msg.Content)
+				// Empty text with no tool calls — bump token budget (thinking ate it) and retry.
+				if content == "" && len(msg.ToolCalls) == 0 && attempt+1 < llmMaxAttempts {
+					lastErr = fmt.Errorf("LLM 返回空内容")
+					if maxTokens < 480 {
+						maxTokens = maxTokens * 2
+						if maxTokens > 480 {
+							maxTokens = 480
+						}
+					}
+					nextDelay = retryAfterDelay(nil, attempt)
+					retryTransient = true
+					break
+				}
+				return CompletionResult{
+					Content:   content,
+					ToolCalls: msg.ToolCalls,
+					Raw:       parsed,
+				}, nil
+			}
+			lastErr = fmt.Errorf("LLM 请求失败 (%d): %s", resp.StatusCode, TruncateChars(string(raw), 180))
+			if resp.StatusCode == 400 || resp.StatusCode == 422 {
+				// Try thinking-disable flags on next inner iteration.
+				continue
+			}
+			if isRetryableHTTPStatus(resp.StatusCode) && attempt+1 < llmMaxAttempts {
+				nextDelay = retryAfterDelay(resp, attempt)
+				retryTransient = true
+				break
+			}
 			return zero, lastErr
+		}
+		if !retryTransient {
+			break
 		}
 	}
 	if lastErr == nil {
