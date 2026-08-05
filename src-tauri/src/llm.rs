@@ -87,13 +87,15 @@ pub fn generate_chat_reply(
 }
 
 /// WeChat ClawBot auto-reply via full agent (tools/rules/skills/memory/cycle).
+/// Returns (reply_text, host_actions) — caller applies host_actions to AppState.
 pub fn generate_wechat_agent_reply(
     llm: &LlmSettings,
     pet: &PetInstance,
     history: &[ChatMessage],
     user_message: &str,
     peer_user_id: Option<&str>,
-) -> Result<String, String> {
+    host: Option<serde_json::Value>,
+) -> Result<(String, Vec<serde_json::Value>), String> {
     let body = json!({
         "llm": llm,
         "pet": pet,
@@ -102,6 +104,7 @@ pub fn generate_wechat_agent_reply(
         "city": llm.weather_city,
         "peerId": peer_user_id.unwrap_or(""),
         "channel": "wechat",
+        "host": host,
     });
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -113,15 +116,20 @@ pub fn generate_wechat_agent_reply(
         tools_used: Vec<String>,
         #[serde(default)]
         skills_used: Vec<String>,
+        #[serde(default)]
+        host_actions: Vec<serde_json::Value>,
     }
     let resp: AgentResp = go_bridge::post_json("/v1/im-agent-reply", &body)?;
     if resp.cycles > 0 || !resp.tools_used.is_empty() || !resp.skills_used.is_empty() {
         eprintln!(
-            "[llm] wechat agent cycles={} tools={:?} skills={:?}",
-            resp.cycles, resp.tools_used, resp.skills_used
+            "[llm] wechat agent cycles={} tools={:?} skills={:?} hostActions={}",
+            resp.cycles,
+            resp.tools_used,
+            resp.skills_used,
+            resp.host_actions.len()
         );
     }
-    Ok(resp.text)
+    Ok((resp.text, resp.host_actions))
 }
 
 pub fn generate_daily_fortune(

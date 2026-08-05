@@ -28,15 +28,17 @@ type Request struct {
 	City    string
 	PeerID  string
 	Channel string
+	Host    *HostSnapshot
 }
 
 // Result is the final user-facing reply plus cycle telemetry.
 type Result struct {
-	Text       string   `json:"text"`
-	Cycles     int      `json:"cycles"`
-	ToolsUsed  []string `json:"toolsUsed,omitempty"`
-	SkillsUsed []string `json:"skillsUsed,omitempty"`
-	Trace      []string `json:"trace,omitempty"`
+	Text        string       `json:"text"`
+	Cycles      int          `json:"cycles"`
+	ToolsUsed   []string     `json:"toolsUsed,omitempty"`
+	SkillsUsed  []string     `json:"skillsUsed,omitempty"`
+	Trace       []string     `json:"trace,omitempty"`
+	HostActions []HostAction `json:"hostActions,omitempty"`
 }
 
 // Runtime owns catalog + memory + tool backends.
@@ -85,6 +87,11 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	deps.PeerID = req.PeerID
 	deps.Catalog = rt.Catalog
 	deps.Memory = rt.Memory
+	if req.Host != nil {
+		deps.Host = &HostBridge{Snapshot: *req.Host}
+	} else {
+		deps.Host = &HostBridge{}
+	}
 
 	matched := rt.Catalog.MatchSkills(req.Message)
 	var matchedNames []string
@@ -101,6 +108,12 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 		messages = append(messages, llm.ChatMessage{
 			Role:    "system",
 			Content: "## Memory Snapshot\n" + snap,
+		})
+	}
+	if deps.Host != nil {
+		messages = append(messages, llm.ChatMessage{
+			Role:    "system",
+			Content: "## Desktop Host State\n" + deps.Host.SnapshotText() + "\n管理提醒/定时推送请用 reminder_* / schedule_* 工具。",
 		})
 	}
 
@@ -149,20 +162,20 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 			text := llm.CleanWechatReply(res.Content, MaxReplyChars)
 			if text == "" {
 				if usedTool {
-					return rt.synthesize(ctx, req, messages, cycle, toolsUsed, skillsUsed, trace)
+					return rt.synthesize(ctx, req, messages, cycle, toolsUsed, skillsUsed, trace, deps)
 				}
 				return rt.fallback(ctx, req, deps, city, matchedNames)
 			}
 			_ = rt.Memory.AddSessionNote(req.PeerID, "Q: "+truncateRunes(req.Message, 80))
 			_ = rt.Memory.AddSessionNote(req.PeerID, "A: "+truncateRunes(text, 80))
 			log.Printf("[agent] peer=%s cycles=%d tools=%v skills=%v", shortPeer(req.PeerID), cycle, toolsUsed, skillsUsed)
-			return Result{
+			return withHost(Result{
 				Text:       text,
 				Cycles:     cycle,
 				ToolsUsed:  uniq(toolsUsed),
 				SkillsUsed: uniq(skillsUsed),
 				Trace:      trace,
-			}, nil
+			}, deps), nil
 		}
 
 		usedTool = true
@@ -191,7 +204,14 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 
-	return rt.synthesize(ctx, req, messages, MaxCycles, toolsUsed, skillsUsed, append(trace, "synthesize"))
+	return rt.synthesize(ctx, req, messages, MaxCycles, toolsUsed, skillsUsed, append(trace, "synthesize"), deps)
+}
+
+func withHost(res Result, deps ToolDeps) Result {
+	if deps.Host != nil {
+		res.HostActions = deps.Host.ActionsCopy()
+	}
+	return res
 }
 
 func (rt *Runtime) buildSystemPrompt(pet types.PetInstance, channel, city string, skillBlocks []string) string {
@@ -221,6 +241,7 @@ func (rt *Runtime) synthesize(
 	messages []llm.ChatMessage,
 	cycles int,
 	toolsUsed, skillsUsed, trace []string,
+	deps ToolDeps,
 ) (Result, error) {
 	messages = append(messages, llm.ChatMessage{
 		Role: "user",
@@ -238,13 +259,13 @@ func (rt *Runtime) synthesize(
 	if text == "" {
 		return Result{}, fmt.Errorf("未能整理出回复")
 	}
-	return Result{
+	return withHost(Result{
 		Text:       text,
 		Cycles:     cycles,
 		ToolsUsed:  uniq(toolsUsed),
 		SkillsUsed: uniq(skillsUsed),
 		Trace:      trace,
-	}, nil
+	}, deps), nil
 }
 
 func (rt *Runtime) fallback(ctx context.Context, req Request, deps ToolDeps, city string, skills []string) (Result, error) {
@@ -261,13 +282,13 @@ func (rt *Runtime) fallback(ctx context.Context, req Request, deps ToolDeps, cit
 		return Result{}, err
 	}
 	text := llm.CleanWechatReply(raw, MaxReplyChars)
-	return Result{
+	return withHost(Result{
 		Text:       text,
 		Cycles:     1,
 		ToolsUsed:  []string{"fallback_gather"},
 		SkillsUsed: skills,
 		Trace:      []string{"fallback"},
-	}, nil
+	}, deps), nil
 }
 
 func gatherBriefing(ctx context.Context, deps ToolDeps, city, userMessage string) string {

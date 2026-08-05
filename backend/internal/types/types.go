@@ -108,14 +108,16 @@ type ImAgentReplyRequest struct {
 	City    string        `json:"city,omitempty"`
 	PeerID  string        `json:"peerId,omitempty"`
 	Channel string        `json:"channel,omitempty"`
+	Host    any           `json:"host,omitempty"`
 }
 
 type ImAgentReplyResponse struct {
-	Text       string   `json:"text"`
-	Cycles     int      `json:"cycles,omitempty"`
-	ToolsUsed  []string `json:"toolsUsed,omitempty"`
-	SkillsUsed []string `json:"skillsUsed,omitempty"`
-	Trace      []string `json:"trace,omitempty"`
+	Text        string           `json:"text"`
+	Cycles      int              `json:"cycles,omitempty"`
+	ToolsUsed   []string         `json:"toolsUsed,omitempty"`
+	SkillsUsed  []string         `json:"skillsUsed,omitempty"`
+	Trace       []string         `json:"trace,omitempty"`
+	HostActions []map[string]any `json:"hostActions,omitempty"`
 }
 
 type ImMessageRequest struct {

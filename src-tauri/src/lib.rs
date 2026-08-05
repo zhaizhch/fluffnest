@@ -2,6 +2,7 @@ mod commands;
 mod go_bridge;
 mod im;
 mod llm;
+mod schedules;
 mod state;
 mod tts;
 mod wechat_ilink;
@@ -119,6 +120,13 @@ pub fn run() {
                 crate::im::check_im_nudges(&handle3);
             });
 
+            // Custom schedule poller (every 30s — minute-level jobs)
+            let handle_sched = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                crate::schedules::check_schedules(&handle_sched);
+            });
+
             // Resume WeChat bridges if previously enabled.
             let handle4 = app.handle().clone();
             std::thread::spawn(move || {
@@ -146,10 +154,12 @@ pub fn run() {
             commands::upsert_reminder,
             commands::add_meeting_reminder,
             commands::quick_set_reminder,
+            commands::quick_disable_reminder,
+            commands::reminder_status,
             commands::delete_reminder,
-            commands::complete_reminder,
-            commands::purchase_product,
-            commands::claim_daily_login,
+            commands::upsert_schedule,
+            commands::delete_schedule,
+            commands::list_schedules,
             commands::tick_idle,
             commands::get_owned_actions,
             commands::generate_pet_line,

@@ -5,10 +5,12 @@ ClawBot inbound messages run through a full agent runtime (not a single chat com
 ## Cycle
 
 ```
-Observe → match skills → (load_skill) → tools → memory → final WeChat reply
+Observe → match skills → (load_skill) → tools → memory → host actions → final WeChat reply
 ```
 
 Max 6 tool rounds per turn. If the model gateway rejects tools, a deterministic gather + synthesize fallback runs.
+
+Host actions (`reminder_*` / `schedule_*`) are queued in the response and applied by the Tauri desktop host.
 
 ## Rules
 
@@ -30,6 +32,7 @@ Bundled under `internal/agent/skills/*/SKILL.md`:
 | `weather-care` | Weather & clothing tips |
 | `companion` | Small talk / emotion |
 | `memory-keeper` | Remember / forget preferences |
+| `scheduler` | Care reminders + timed WeChat/pet pushes |
 
 Skills auto-match via triggers; the model can also `load_skill`.
 
@@ -39,6 +42,18 @@ Skills auto-match via triggers; the model can also `load_skill`.
 - `get_weather` / `get_news`
 - `memory_read` / `memory_write` / `memory_delete` / `memory_list`
 - `load_skill` / `list_skills`
+- `reminder_list` / `reminder_set` / `reminder_cancel`
+- `schedule_list` / `schedule_upsert` / `schedule_cancel`
+
+## Schedules (desktop)
+
+Persisted in app state `schedules[]`. Kinds:
+
+- `weather_forecast` — evening tomorrow weather → WeChat/pet
+- `news_brief` — morning lookback news briefing
+- `custom_prompt` — free-form LLM push
+
+Requires ClawBot owner peer + `context_token` (set automatically after the user messages ClawBot once).
 
 ## Memory
 
@@ -57,11 +72,17 @@ Persisted at `~/.fluffnest/agent-memory.json` (override with `FLUFFNEST_AGENT_ME
   "llm": {},
   "pet": {},
   "history": [],
-  "message": "今天北京天气怎么样",
+  "message": "每天晚上八点把明天天气发到微信",
   "city": "北京",
   "peerId": "user@im.wechat",
-  "channel": "wechat"
+  "channel": "wechat",
+  "host": {
+    "reminders": [],
+    "schedules": [],
+    "ownerReady": true,
+    "reminderSummary": "喝水：开着 · 久坐：关着"
+  }
 }
 ```
 
-Response includes `text`, `cycles`, `toolsUsed`, `skillsUsed`, `trace`.
+Response includes `text`, `cycles`, `toolsUsed`, `skillsUsed`, `trace`, `hostActions`.

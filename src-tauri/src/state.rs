@@ -39,6 +39,32 @@ pub struct ReminderRule {
     pub last_fired_at: Option<String>,
 }
 
+/// User-defined recurring automation (e.g. evening weather → WeChat).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleJob {
+    pub id: String,
+    pub title: String,
+    /// weather_forecast | news_brief | custom_prompt
+    pub kind: String,
+    /// wechat | pet
+    pub channel: String,
+    pub enabled: bool,
+    /// Local hour 0–23
+    pub hour: i32,
+    /// Local minute 0–59
+    pub minute: i32,
+    /// Empty = every day; else 0=Sun … 6=Sat
+    #[serde(default)]
+    pub days_of_week: Vec<i32>,
+    /// kind-specific: city, forTomorrow, lookbackHours, prompt, …
+    #[serde(default)]
+    pub params: serde_json::Map<String, serde_json::Value>,
+    /// Last local calendar date this job fired (YYYY-MM-DD)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fired_date: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShopProduct {
@@ -271,6 +297,12 @@ pub struct WechatAuth {
     pub get_updates_buf: String,
     #[serde(default)]
     pub account_label: Option<String>,
+    /// Latest ClawBot peer to receive proactive pushes (updated on inbound).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_peer_id: Option<String>,
+    /// Latest context_token for owner_peer_id (required by iLink sendmessage).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_context_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +350,9 @@ pub struct Settings {
 pub struct AppState {
     pub pets: Vec<PetInstance>,
     pub reminders: Vec<ReminderRule>,
+    /// Custom timed automations (weather/news/custom → WeChat or pet).
+    #[serde(default)]
+    pub schedules: Vec<ScheduleJob>,
     pub wallet: Wallet,
     #[serde(default)]
     pub owned_actions: Vec<OwnedAction>,
@@ -356,78 +391,17 @@ struct PetSeed {
     price: i32,
 }
 
-/// Mirrors frontend petCatalog.ts (category is frontend-only for UI grouping)
+/// Mirrors frontend petCatalog.ts — single pet: 暖卡卡
 fn catalog() -> Vec<PetSeed> {
-    vec![
-        // fluff
-        PetSeed { id: "pet-mochi", species: "mochi", name: "糯糯", personality: "clingy", unlock: "default", rarity: "N", price: 0 },
-        PetSeed { id: "pet-milky", species: "milky", name: "咪可", personality: "calm", unlock: "default", rarity: "N", price: 0 },
-        PetSeed { id: "pet-cheese", species: "cheese", name: "芝芝", personality: "lively", unlock: "login", rarity: "R", price: 0 },
-        PetSeed { id: "pet-axo", species: "axo", name: "波波", personality: "clingy", unlock: "shop", rarity: "R", price: 80 },
-        PetSeed { id: "pet-cha", species: "cha", name: "茶茶", personality: "calm", unlock: "shop", rarity: "R", price: 90 },
-        PetSeed { id: "pet-leo", species: "leo", name: "软狮", personality: "lively", unlock: "shop", rarity: "SR", price: 120 },
-        PetSeed { id: "pet-rising", species: "rising", name: "瑞星小狮子", personality: "lively", unlock: "shop", rarity: "SR", price: 128 },
-        PetSeed { id: "pet-otta", species: "otta", name: "獭獭", personality: "clingy", unlock: "shop", rarity: "R", price: 95 },
-        PetSeed { id: "pet-kebo", species: "kebo", name: "柯宝", personality: "lively", unlock: "shop", rarity: "SR", price: 130 },
-        // companion (humanoid)
-        PetSeed { id: "pet-bean", species: "bean", name: "子平波波", personality: "lively", unlock: "default", rarity: "N", price: 0 },
-        PetSeed { id: "pet-boba", species: "boba", name: "波波", personality: "calm", unlock: "shop", rarity: "R", price: 110 },
-        PetSeed { id: "pet-pearlcup", species: "pearlcup", name: "珍珍", personality: "lively", unlock: "shop", rarity: "R", price: 85 },
-        PetSeed { id: "pet-whitemage", species: "whitemage", name: "白魔法师", personality: "calm", unlock: "default", rarity: "R", price: 0 },
-        PetSeed { id: "pet-violetmage", species: "violetmage", name: "紫发法师", personality: "calm", unlock: "shop", rarity: "SR", price: 140 },
-        PetSeed { id: "pet-crystmage", species: "crystmage", name: "晶角法师", personality: "calm", unlock: "shop", rarity: "SR", price: 160 },
-        PetSeed { id: "pet-broomwitch", species: "broomwitch", name: "扫帚魔女", personality: "lively", unlock: "shop", rarity: "SR", price: 140 },
-        PetSeed { id: "pet-fiufiu", species: "fiufiu", name: "菲菲", personality: "clingy", unlock: "shop", rarity: "SR", price: 130 },
-        PetSeed { id: "pet-fiufiu2", species: "fiufiu2", name: "菲菲·咒", personality: "clingy", unlock: "shop", rarity: "SR", price: 135 },
-        PetSeed { id: "pet-luna", species: "luna", name: "露娜", personality: "clingy", unlock: "default", rarity: "N", price: 0 },
-        PetSeed { id: "pet-amy", species: "amy", name: "艾米", personality: "lively", unlock: "shop", rarity: "R", price: 95 },
-        PetSeed { id: "pet-dreamgirl", species: "dreamgirl", name: "梦女孩", personality: "calm", unlock: "shop", rarity: "R", price: 100 },
-        PetSeed { id: "pet-nous", species: "nous", name: "诺斯", personality: "calm", unlock: "shop", rarity: "R", price: 105 },
-        PetSeed { id: "pet-mint", species: "mint", name: "薄荷丝", personality: "calm", unlock: "shop", rarity: "SR", price: 150 },
-        PetSeed { id: "pet-qgirl", species: "qgirl", name: "可爱女孩", personality: "clingy", unlock: "shop", rarity: "R", price: 90 },
-        PetSeed { id: "pet-puppyhat", species: "puppyhat", name: "小狗帽", personality: "clingy", unlock: "login", rarity: "R", price: 0 },
-        PetSeed { id: "pet-chibigirl", species: "chibigirl", name: "小可", personality: "lively", unlock: "shop", rarity: "R", price: 100 },
-        PetSeed { id: "pet-hirose", species: "hirose", name: "广濑", personality: "lively", unlock: "shop", rarity: "R", price: 110 },
-        PetSeed { id: "pet-pinkribbon", species: "pinkribbon", name: "粉缎带", personality: "clingy", unlock: "shop", rarity: "R", price: 105 },
-        PetSeed { id: "pet-redcostume", species: "redcostume", name: "红装姑娘", personality: "calm", unlock: "shop", rarity: "SR", price: 145 },
-        PetSeed { id: "pet-girlcat", species: "girlcat", name: "小女孩与猫", personality: "clingy", unlock: "shop", rarity: "SR", price: 140 },
-        PetSeed { id: "pet-moonbun", species: "moonbun", name: "月兔双髻", personality: "lively", unlock: "shop", rarity: "R", price: 115 },
-        PetSeed { id: "pet-liney", species: "liney", name: "线线", personality: "calm", unlock: "shop", rarity: "R", price: 88 },
-        PetSeed { id: "pet-turtleneck", species: "turtleneck", name: "灰高领", personality: "calm", unlock: "shop", rarity: "SR", price: 155 },
-        PetSeed { id: "pet-kongirl", species: "kongirl", name: "轻音少女", personality: "lively", unlock: "shop", rarity: "SR", price: 130 },
-        PetSeed { id: "pet-rima", species: "rima", name: "莉摩", personality: "lively", unlock: "shop", rarity: "R", price: 120 },
-        // idol
-        PetSeed { id: "pet-cloud", species: "cloud", name: "珍珠偶像", personality: "calm", unlock: "default", rarity: "N", price: 0 },
-        PetSeed { id: "pet-rose", species: "rose", name: "玫瑰偶像", personality: "clingy", unlock: "shop", rarity: "R", price: 100 },
-        PetSeed { id: "pet-pinky", species: "pinky", name: "粉珍珠", personality: "clingy", unlock: "login", rarity: "R", price: 0 },
-        PetSeed { id: "pet-miku", species: "miku", name: "初音", personality: "lively", unlock: "shop", rarity: "SR", price: 140 },
-        PetSeed { id: "pet-scallion", species: "scallion", name: "葱葱初音", personality: "lively", unlock: "shop", rarity: "SR", price: 160 },
-        PetSeed { id: "pet-codey", species: "codey", name: "码音", personality: "calm", unlock: "shop", rarity: "R", price: 120 },
-        PetSeed { id: "pet-rosycoder", species: "rosycoder", name: "玫音", personality: "clingy", unlock: "shop", rarity: "SR", price: 145 },
-        PetSeed { id: "pet-nako", species: "nako", name: "中野", personality: "calm", unlock: "shop", rarity: "R", price: 115 },
-        // digi
-        PetSeed { id: "pet-digibaby", species: "digibaby", name: "滚球兽", personality: "clingy", unlock: "default", rarity: "N", price: 0 },
-        PetSeed { id: "pet-agumon", species: "agumon", name: "亚古兽", personality: "lively", unlock: "default", rarity: "R", price: 0 },
-        PetSeed { id: "pet-agumon2", species: "agumon2", name: "战斗亚古兽", personality: "lively", unlock: "shop", rarity: "R", price: 100 },
-        PetSeed { id: "pet-gabumon", species: "gabumon", name: "加布兽", personality: "calm", unlock: "shop", rarity: "R", price: 100 },
-        PetSeed { id: "pet-guilmon", species: "guilmon", name: "古拉兽", personality: "lively", unlock: "shop", rarity: "SR", price: 130 },
-        PetSeed { id: "pet-veemon", species: "veemon", name: "Ｖ仔兽", personality: "lively", unlock: "login", rarity: "R", price: 0 },
-        PetSeed { id: "pet-angemon", species: "angemon", name: "天女兽", personality: "calm", unlock: "shop", rarity: "SR", price: 150 },
-        PetSeed { id: "pet-kaizer", species: "kaizer", name: "帝皇龙甲兽", personality: "lively", unlock: "shop", rarity: "SSR", price: 220 },
-        // fantasy
-        PetSeed { id: "pet-yinyue", species: "yinyue", name: "银月狐", personality: "calm", unlock: "default", rarity: "R", price: 0 },
-        PetSeed { id: "pet-nightly", species: "nightly", name: "夜行狐", personality: "calm", unlock: "shop", rarity: "R", price: 110 },
-        PetSeed { id: "pet-frieren", species: "frieren", name: "芙莉莲", personality: "calm", unlock: "shop", rarity: "SR", price: 150 },
-        PetSeed { id: "pet-chibi", species: "chibi", name: "小芙莉莲", personality: "clingy", unlock: "login", rarity: "R", price: 0 },
-        PetSeed { id: "pet-silvertrail", species: "silvertrail", name: "芙莉莲·杖", personality: "calm", unlock: "shop", rarity: "SR", price: 155 },
-        PetSeed { id: "pet-sleepmage", species: "sleepmage", name: "芙莉莲·眠", personality: "calm", unlock: "shop", rarity: "R", price: 125 },
-        // star
-        PetSeed { id: "pet-kaka", species: "kaka", name: "卡卡", personality: "lively", unlock: "default", rarity: "N", price: 0 },
-        PetSeed { id: "pet-kaka5", species: "kaka5", name: "暖卡卡", personality: "clingy", unlock: "shop", rarity: "R", price: 90 },
-        PetSeed { id: "pet-kakastar", species: "kakastar", name: "咖咖星", personality: "lively", unlock: "shop", rarity: "SR", price: 135 },
-        PetSeed { id: "pet-kakadawang", species: "kakadawang", name: "卡卡大王", personality: "lively", unlock: "shop", rarity: "SSR", price: 210 },
-        PetSeed { id: "pet-kakaqueen", species: "kakaqueen", name: "卡卡女王", personality: "calm", unlock: "shop", rarity: "SSR", price: 200 },
-    ]
+    vec![PetSeed {
+        id: "pet-kaka5",
+        species: "kaka5",
+        name: "暖卡卡",
+        personality: "clingy",
+        unlock: "default",
+        rarity: "R",
+        price: 0,
+    }]
 }
 
 fn make_pet(seed: &PetSeed, active: bool, now: &str) -> PetInstance {
@@ -481,6 +455,7 @@ impl Default for AppState {
                     last_fired_at: None,
                 },
             ],
+            schedules: Vec::new(),
             wallet: Wallet { coin: 200, gem: 0 },
             owned_actions: default_owned_actions(&now),
             daily_login: DailyLogin::default(),
@@ -526,8 +501,6 @@ fn all_action_ids() -> Vec<&'static str> {
 pub fn grant_admin_unlocks(state: &mut AppState) {
     let now = chrono::Utc::now().to_rfc3339();
     state.settings.is_admin = true;
-    state.wallet.coin = state.wallet.coin.max(9999);
-    state.wallet.gem = state.wallet.gem.max(999);
     for p in state.pets.iter_mut() {
         p.unlocked = true;
         p.bond = p.bond.max(100);
@@ -568,82 +541,8 @@ pub fn take_bond_budget(state: &mut AppState, want: i32) -> i32 {
 }
 
 fn default_shop_catalog() -> Vec<ShopProduct> {
-    catalog()
-        .into_iter()
-        .filter(|s| s.unlock == "shop" && s.price > 0)
-        .map(|s| ShopProduct {
-            id: format!("shop-{}", s.species),
-            sku: format!("pet.{}.unlock", s.species),
-            r#type: "pet_unlock".into(),
-            target_id: s.species.into(),
-            currency: "coin".into(),
-            amount: s.price,
-            rarity: s.rarity.into(),
-            available: true,
-            name: format!("解锁·{}", s.name),
-            iap_product_id: None,
-        })
-        .chain(std::iter::once(ShopProduct {
-            id: "shop-iap-preview".into(),
-            sku: "pet.kaizer.iap".into(),
-            r#type: "pet_unlock".into(),
-            target_id: "kaizer".into(),
-            currency: "real".into(),
-            amount: 12,
-            rarity: "SSR".into(),
-            available: false,
-            name: "帝皇龙甲兽（即将开放）".into(),
-            iap_product_id: Some("com.fluffnest.pet.kaizer".into()),
-        }))
-        .collect()
-}
-
-pub fn reward_for_streak(streak: i32) -> DailyReward {
-    let day = ((streak - 1).rem_euclid(7)) + 1;
-    match day {
-        1 => DailyReward {
-            kind: "coin".into(),
-            target_id: "coin".into(),
-            amount: 40,
-            label: "每日金币 ×40".into(),
-        },
-        2 => DailyReward {
-            kind: "pet".into(),
-            target_id: "cheese".into(),
-            amount: 1,
-            label: "解锁宠物·芝芝".into(),
-        },
-        3 => DailyReward {
-            kind: "coin".into(),
-            target_id: "coin".into(),
-            amount: 60,
-            label: "每日金币 ×60".into(),
-        },
-        4 => DailyReward {
-            kind: "pet".into(),
-            target_id: "pinky".into(),
-            amount: 1,
-            label: "解锁宠物·粉珍珠".into(),
-        },
-        5 => DailyReward {
-            kind: "pet".into(),
-            target_id: "veemon".into(),
-            amount: 1,
-            label: "解锁宠物·Ｖ仔兽".into(),
-        },
-        6 => DailyReward {
-            kind: "pet".into(),
-            target_id: "puppyhat".into(),
-            amount: 1,
-            label: "解锁宠物·小狗帽".into(),
-        },
-        _ => DailyReward {
-            kind: "pet".into(),
-            target_id: "chibi".into(),
-            amount: 1,
-            label: "解锁宠物·小芙莉莲".into(),
-        },
-    }
+    // Economy removed: no shop unlock SKUs.
+    Vec::new()
 }
 
 pub fn ensure_migrated(state: &mut AppState) {
@@ -729,6 +628,17 @@ pub fn ensure_migrated(state: &mut AppState) {
     }
     state.pets = next_pets;
 
+    // Single-pet build: always keep 暖卡卡 unlocked & active.
+    for p in state.pets.iter_mut() {
+        if p.species_id == "kaka5" {
+            p.unlocked = true;
+            p.is_active = true;
+            p.name = "暖卡卡".into();
+        } else {
+            p.is_active = false;
+        }
+    }
+
     state.shop_catalog = default_shop_catalog();
 
     // One-shot: older builds forced admin unlock every launch (login gifts felt auto-claimed).
@@ -759,35 +669,6 @@ pub fn ensure_migrated(state: &mut AppState) {
     let _ = now;
 }
 
-pub fn prepare_daily_login(state: &mut AppState) {
-    let today = today_local();
-    let claimed = state
-        .daily_login
-        .last_claim_date
-        .as_ref()
-        .map(|d| d == &today)
-        .unwrap_or(false);
-    state.daily_login.claimed_today = claimed;
-    if !claimed {
-        let next_streak = match &state.daily_login.last_claim_date {
-            Some(prev) => {
-                let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1))
-                    .format("%Y-%m-%d")
-                    .to_string();
-                if prev == &yesterday {
-                    state.daily_login.streak + 1
-                } else {
-                    1
-                }
-            }
-            None => 1,
-        };
-        state.daily_login.pending_rewards = vec![reward_for_streak(next_streak.max(1))];
-    } else {
-        state.daily_login.pending_rewards.clear();
-    }
-}
-
 fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -807,7 +688,6 @@ pub fn load_state(app: &AppHandle) -> AppState {
         Err(_) => AppState::default(),
     };
     ensure_migrated(&mut state);
-    prepare_daily_login(&mut state);
     let _ = save_state(app, &state);
     state
 }

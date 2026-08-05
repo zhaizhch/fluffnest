@@ -806,6 +806,11 @@ html.pet-window #root {
   cursor: wait;
 }
 
+.quick-chip.on {
+  border-color: rgba(110, 181, 192, 0.55);
+  background: rgba(110, 181, 192, 0.18);
+}
+
 .quick-chip small {
   font-size: 10px;
   color: #8a7468;

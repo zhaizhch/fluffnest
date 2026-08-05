@@ -1,12 +1,14 @@
-/** Parse casual Chinese reminder phrases from quick-chat input. */
+/** Parse casual Chinese reminder / schedule status phrases from quick-chat input. */
 
 export type ReminderIntent =
-  | { kind: "water"; intervalMinutes: number }
-  | { kind: "stretch"; intervalMinutes: number }
-  | { kind: "meeting"; title: string; at: Date };
+  | { action: "set"; kind: "water"; intervalMinutes: number }
+  | { action: "set"; kind: "stretch"; intervalMinutes: number }
+  | { action: "set"; kind: "meeting"; title: string; at: Date }
+  | { action: "cancel"; kind: "water" | "stretch" | "meeting"; id?: string }
+  | { action: "status"; kind?: "water" | "stretch" | "all" };
 
 function looksLikeReminder(text: string): boolean {
-  return /提醒|开会|会议|喝水|喝杯水|久坐|起身|伸懒腰|伸展|活动一下|别忘了|叫我/.test(
+  return /提醒|开会|会议|喝水|喝杯水|久坐|起身|伸懒腰|伸展|活动一下|别忘了|叫我|取消|关掉|关闭|开了吗|开着吗|有没有提醒/.test(
     text,
   );
 }
@@ -15,7 +17,6 @@ function looksLikeReminder(text: string): boolean {
 export function parseLocalDateTime(text: string, now = new Date()): Date | null {
   const t = text.trim();
 
-  // ISO-ish or datetime-local fragments
   const iso = t.match(
     /(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})/,
   );
@@ -35,7 +36,6 @@ export function parseLocalDateTime(text: string, now = new Date()): Date | null 
   else if (/明天|明日/.test(t)) dayOffset = 1;
   else if (/今天|今日/.test(t)) dayOffset = 0;
 
-  // 下午3点 / 晚上8点半 / 上午10:30 / 15:00
   let hour: number | null = null;
   let minute = 0;
 
@@ -63,7 +63,6 @@ export function parseLocalDateTime(text: string, now = new Date()): Date | null 
   d.setDate(d.getDate() + dayOffset);
   d.setHours(hour, minute, 0, 0);
 
-  // If only time given and already passed today, roll to tomorrow
   if (dayOffset === 0 && !/今天|今日/.test(t) && d.getTime() <= now.getTime()) {
     d.setDate(d.getDate() + 1);
   }
@@ -81,16 +80,36 @@ function parseInterval(text: string, fallback: number): number {
   return Math.min(24 * 60, Math.max(5, n));
 }
 
+function careKind(text: string): "water" | "stretch" | null {
+  if (/喝水|喝杯水|补水|喝一口/.test(text)) return "water";
+  if (/久坐|起身|伸懒腰|伸展|活动一下|站起来|走动/.test(text)) return "stretch";
+  return null;
+}
+
 export function parseReminderIntent(text: string): ReminderIntent | null {
   const raw = text.trim();
   if (!raw || !looksLikeReminder(raw)) return null;
 
-  if (/喝水|喝杯水|补水|喝一口/.test(raw)) {
-    return { kind: "water", intervalMinutes: parseInterval(raw, 60) };
+  // Status first
+  if (/开了吗|开着吗|有没有|是否开启|现在有哪些提醒|提醒状态/.test(raw)) {
+    const k = careKind(raw);
+    return { action: "status", kind: k ?? "all" };
   }
 
-  if (/久坐|起身|伸懒腰|伸展|活动一下|站起来|走动/.test(raw)) {
-    return { kind: "stretch", intervalMinutes: parseInterval(raw, 45) };
+  // Cancel before set
+  if (/取消|关掉|关闭|不要再|别再提醒|停止提醒/.test(raw)) {
+    const k = careKind(raw);
+    if (k) return { action: "cancel", kind: k };
+    if (/会议|开会/.test(raw)) return { action: "cancel", kind: "meeting" };
+    if (/提醒/.test(raw)) return { action: "status", kind: "all" };
+  }
+
+  const care = careKind(raw);
+  if (care === "water") {
+    return { action: "set", kind: "water", intervalMinutes: parseInterval(raw, 60) };
+  }
+  if (care === "stretch") {
+    return { action: "set", kind: "stretch", intervalMinutes: parseInterval(raw, 45) };
   }
 
   if (/会议|开会|站会|约见|面试/.test(raw)) {
@@ -105,10 +124,9 @@ export function parseReminderIntent(text: string): ReminderIntent | null {
     }
     const quoted = raw.match(/[「『"“](.+?)[」』"”]/);
     if (quoted?.[1]) title = quoted[1].trim();
-    return { kind: "meeting", title, at };
+    return { action: "set", kind: "meeting", title, at };
   }
 
-  // Generic "提醒我 … 在时间"
   if (/提醒/.test(raw)) {
     const at = parseLocalDateTime(raw);
     if (at) {
@@ -120,14 +138,22 @@ export function parseReminderIntent(text: string): ReminderIntent | null {
           .replace(/[，。！？\s]+/g, " ")
           .trim()
           .slice(0, 20) || "提醒";
-      return { kind: "meeting", title, at };
+      return { action: "set", kind: "meeting", title, at };
     }
   }
 
   return null;
 }
 
-export function reminderConfirmText(intent: ReminderIntent): string {
+export function reminderConfirmText(intent: ReminderIntent, statusSummary?: string): string {
+  if (intent.action === "status") {
+    return statusSummary?.trim() || "我去看看提醒状态…";
+  }
+  if (intent.action === "cancel") {
+    if (intent.kind === "water") return "好，喝水提醒关了～";
+    if (intent.kind === "stretch") return "好，久坐提醒关了～";
+    return "好，相关提醒关掉了～";
+  }
   if (intent.kind === "water") {
     return `好，每 ${intent.intervalMinutes} 分钟提醒你喝水～`;
   }

@@ -22,6 +22,7 @@ type ToolDeps struct {
 	Catalog Catalog
 	City    string
 	PeerID  string
+	Host    *HostBridge
 }
 
 type toolHandler func(ctx context.Context, deps ToolDeps, args map[string]any) string
@@ -86,6 +87,55 @@ func toolSpecs() []llm.ToolSpec {
 			"type":       "object",
 			"properties": map[string]any{},
 		}),
+		fnTool("reminder_list", "查看桌面喝水/久坐/会议提醒开关状态。", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}),
+		fnTool("reminder_set", "开启或调整喝水/久坐/会议提醒。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"kind":            map[string]any{"type": "string", "description": "water|stretch|meeting"},
+				"intervalMinutes": map[string]any{"type": "integer", "description": "周期分钟，water/stretch 用"},
+				"title":           map[string]any{"type": "string"},
+				"at":              map[string]any{"type": "string", "description": "会议 RFC3339 时间"},
+			},
+			"required": []string{"kind"},
+		}),
+		fnTool("reminder_cancel", "关闭喝水/久坐提醒，或按 id 关闭会议提醒。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"kind": map[string]any{"type": "string", "description": "water|stretch"},
+				"id":   map[string]any{"type": "string"},
+			},
+		}),
+		fnTool("schedule_list", "列出用户自定义定时推送任务（天气/新闻简报等到微信）。", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}),
+		fnTool("schedule_upsert", "创建或更新定时推送。例：每天 20:00 发明日天气到微信；每天 09:00 发过去 24h 资讯简报。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":             map[string]any{"type": "string"},
+				"title":          map[string]any{"type": "string"},
+				"kind":           map[string]any{"type": "string", "description": "weather_forecast|news_brief|custom_prompt"},
+				"channel":        map[string]any{"type": "string", "description": "wechat|pet，默认 wechat"},
+				"hour":           map[string]any{"type": "integer", "description": "本地小时 0-23"},
+				"minute":         map[string]any{"type": "integer", "description": "本地分钟 0-59"},
+				"city":           map[string]any{"type": "string"},
+				"forTomorrow":    map[string]any{"type": "boolean"},
+				"lookbackHours":  map[string]any{"type": "integer"},
+				"prompt":         map[string]any{"type": "string", "description": "custom_prompt 说明"},
+				"daysOfWeek":     map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+			},
+			"required": []string{"kind", "hour"},
+		}),
+		fnTool("schedule_cancel", "关闭或删除定时推送（按 id 或标题关键词）。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":    map[string]any{"type": "string"},
+				"query": map[string]any{"type": "string", "description": "标题或类型关键词"},
+			},
+		}),
 	}
 }
 
@@ -107,15 +157,21 @@ func runTool(ctx context.Context, deps ToolDeps, tc llm.ToolCall) string {
 		args = map[string]any{}
 	}
 	handlers := map[string]toolHandler{
-		"web_search":     toolWebSearch,
-		"get_weather":    toolWeather,
-		"get_news":       toolNews,
-		"memory_read":    toolMemoryRead,
-		"memory_write":   toolMemoryWrite,
-		"memory_delete":  toolMemoryDelete,
-		"memory_list":    toolMemoryList,
-		"load_skill":     toolLoadSkill,
-		"list_skills":    toolListSkills,
+		"web_search":       toolWebSearch,
+		"get_weather":      toolWeather,
+		"get_news":         toolNews,
+		"memory_read":      toolMemoryRead,
+		"memory_write":     toolMemoryWrite,
+		"memory_delete":    toolMemoryDelete,
+		"memory_list":      toolMemoryList,
+		"load_skill":       toolLoadSkill,
+		"list_skills":      toolListSkills,
+		"reminder_list":    toolReminderList,
+		"reminder_set":     toolReminderSet,
+		"reminder_cancel":  toolReminderCancel,
+		"schedule_list":    toolScheduleList,
+		"schedule_upsert":  toolScheduleUpsert,
+		"schedule_cancel":  toolScheduleCancel,
 	}
 	h, ok := handlers[tc.Function.Name]
 	if !ok {
@@ -245,3 +301,82 @@ func toolLoadSkill(_ context.Context, deps ToolDeps, args map[string]any) string
 func toolListSkills(_ context.Context, deps ToolDeps, _ map[string]any) string {
 	return deps.Catalog.SkillsBrief()
 }
+
+func toolReminderList(_ context.Context, deps ToolDeps, _ map[string]any) string {
+	if deps.Host == nil {
+		return "桌面主机未连接，无法读取提醒"
+	}
+	return "当前提醒状态：\n" + deps.Host.Snapshot.ReminderSummary + "\n详情：" + deps.Host.ListRemindersJSON()
+}
+
+func toolReminderSet(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Host == nil {
+		return "桌面主机未连接"
+	}
+	kind, _ := args["kind"].(string)
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return "需要 kind=water|stretch|meeting"
+	}
+	deps.Host.Add("reminder.set", args)
+	return fmt.Sprintf("已排队开启提醒 kind=%s（桌面会立即生效）", kind)
+}
+
+func toolReminderCancel(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Host == nil {
+		return "桌面主机未连接"
+	}
+	kind, _ := args["kind"].(string)
+	id, _ := args["id"].(string)
+	if strings.TrimSpace(kind) == "" && strings.TrimSpace(id) == "" {
+		return "需要 kind 或 id"
+	}
+	deps.Host.Add("reminder.cancel", args)
+	return "已排队关闭提醒（桌面会立即生效）"
+}
+
+func toolScheduleList(_ context.Context, deps ToolDeps, _ map[string]any) string {
+	if deps.Host == nil {
+		return "桌面主机未连接"
+	}
+	text := deps.Host.SnapshotText()
+	return text + "\n详情：" + deps.Host.ListSchedulesJSON()
+}
+
+func toolScheduleUpsert(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Host == nil {
+		return "桌面主机未连接"
+	}
+	kind, _ := args["kind"].(string)
+	if strings.TrimSpace(kind) == "" {
+		return "需要 kind=weather_forecast|news_brief|custom_prompt"
+	}
+	if _, ok := args["channel"]; !ok {
+		args["channel"] = "wechat"
+	}
+	if _, ok := args["minute"]; !ok {
+		args["minute"] = 0
+	}
+	deps.Host.Add("schedule.upsert", args)
+	hour, _ := args["hour"].(float64)
+	minute, _ := args["minute"].(float64)
+	title, _ := args["title"].(string)
+	if title == "" {
+		title = kind
+	}
+	return fmt.Sprintf("已排队设定时「%s」每天 %02d:%02d（桌面会立即生效）", title, int(hour), int(minute))
+}
+
+func toolScheduleCancel(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Host == nil {
+		return "桌面主机未连接"
+	}
+	id, _ := args["id"].(string)
+	query, _ := args["query"].(string)
+	if strings.TrimSpace(id) == "" && strings.TrimSpace(query) == "" {
+		return "需要 id 或 query"
+	}
+	deps.Host.Add("schedule.cancel", args)
+	return "已排队取消定时任务（桌面会立即生效）"
+}
+

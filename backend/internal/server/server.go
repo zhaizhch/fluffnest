@@ -310,6 +310,16 @@ func (s *Server) handleImAgentReply(w http.ResponseWriter, r *http.Request) {
 	if channel == "" {
 		channel = "wechat"
 	}
+	var hostSnap *agent.HostSnapshot
+	if req.Host != nil {
+		raw, err := json.Marshal(req.Host)
+		if err == nil {
+			var snap agent.HostSnapshot
+			if json.Unmarshal(raw, &snap) == nil {
+				hostSnap = &snap
+			}
+		}
+	}
 	out, err := s.agent.Run(r.Context(), agent.Request{
 		LLM:     req.LLM,
 		Pet:     req.Pet,
@@ -318,17 +328,26 @@ func (s *Server) handleImAgentReply(w http.ResponseWriter, r *http.Request) {
 		City:    city,
 		PeerID:  req.PeerID,
 		Channel: channel,
+		Host:    hostSnap,
 	})
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	hostActions := make([]map[string]any, 0, len(out.HostActions))
+	for _, a := range out.HostActions {
+		hostActions = append(hostActions, map[string]any{
+			"op":   a.Op,
+			"args": a.Args,
+		})
+	}
 	writeJSON(w, http.StatusOK, types.ImAgentReplyResponse{
-		Text:       out.Text,
-		Cycles:     out.Cycles,
-		ToolsUsed:  out.ToolsUsed,
-		SkillsUsed: out.SkillsUsed,
-		Trace:      out.Trace,
+		Text:        out.Text,
+		Cycles:      out.Cycles,
+		ToolsUsed:   out.ToolsUsed,
+		SkillsUsed:  out.SkillsUsed,
+		Trace:       out.Trace,
+		HostActions: hostActions,
 	})
 }
 

@@ -96,6 +96,8 @@ export function PetApp() {
   } | null>(null);
   const [imUnread, setImUnread] = useState(0);
   const [wechatPending, setWechatPending] = useState(0);
+  const [waterEnabled, setWaterEnabled] = useState(true);
+  const [stretchEnabled, setStretchEnabled] = useState(true);
   const [latestImId, setLatestImIdState] = useState<string | null>(null);
   const latestImIdRef = useRef<string | null>(null);
   const setLatestImId = (id: string | null) => {
@@ -199,7 +201,7 @@ export function PetApp() {
     setFortuneText(null);
     setInfoCard(null);
 
-    const speciesId = petRef.current?.speciesId ?? "mochi";
+    const speciesId = petRef.current?.speciesId ?? "kaka5";
     const petName = petRef.current?.name ?? "绒窝";
     const plan = buildCareAlertPlan(kind, speciesId, petName);
     careAlertRef.current = true;
@@ -497,7 +499,7 @@ export function PetApp() {
 
   const playPetSays = useCallback(
     (payload: PetSaysPayload) => {
-      const species = petRef.current?.speciesId ?? "mochi";
+      const species = petRef.current?.speciesId ?? "kaka5";
       const b = (payload.behavior as PetBehavior) || "wave";
 
       if (payload.kind === "fortune") {
@@ -705,6 +707,12 @@ export function PetApp() {
         const unread = (s.imInbox ?? []).filter((m) => !m.acknowledged);
         setImUnread(unread.length);
         setLatestImId(unread.length ? unread[unread.length - 1]!.id : null);
+        const water = s.reminders.find((r) => r.id === "rem-water" || r.type === "water");
+        const stretch = s.reminders.find(
+          (r) => r.id === "rem-stretch" || r.type === "stretch",
+        );
+        setWaterEnabled(water?.enabled ?? true);
+        setStretchEnabled(stretch?.enabled ?? true);
       })
       .catch(() => undefined);
 
@@ -762,7 +770,7 @@ export function PetApp() {
           }
 
           // Meetings etc. keep the lighter bubble path
-          const species = petRef.current?.speciesId ?? "mochi";
+          const species = petRef.current?.speciesId ?? "kaka5";
           const line = e.payload.bubble ?? `⏰ ${e.payload.title}`;
           if (species === "rising") {
             showBubble(line, 3600);
@@ -1063,7 +1071,7 @@ export function PetApp() {
       const n = clickCount.current;
       clickCount.current = 0;
       if (n >= 2) return;
-      const speciesId = petRef.current?.speciesId ?? "mochi";
+      const speciesId = petRef.current?.speciesId ?? "kaka5";
       if (speciesId === "rising") {
         void runRisingSteps(buildRisingClickAction(), { userInitiated: true });
         const llm = llmFromSettings(settingsRef.current);
@@ -1207,19 +1215,39 @@ export function PetApp() {
       if (intent) {
         setMenuBusy(true);
         try {
-          if (intent.kind === "meeting") {
+          if (intent.action === "status") {
+            const st = await api.reminderStatus();
+            showBubble(reminderConfirmText(intent, st.summary), 4200);
+            setWaterEnabled(!!st.water?.enabled);
+            setStretchEnabled(!!st.stretch?.enabled);
+          } else if (intent.action === "cancel") {
+            if (intent.kind === "meeting") {
+              const st = await api.reminderStatus();
+              const mid = st.meetings[0]?.id;
+              if (mid) await api.quickDisableReminder("meeting", mid);
+              else throw new Error("没有进行中的会议提醒");
+            } else {
+              await api.quickDisableReminder(intent.kind);
+              if (intent.kind === "water") setWaterEnabled(false);
+              if (intent.kind === "stretch") setStretchEnabled(false);
+            }
+            showBubble(reminderConfirmText(intent), 3600);
+          } else if (intent.kind === "meeting") {
             await api.quickSetReminder({
               kind: "meeting",
               title: intent.title,
               at: intent.at.toISOString(),
             });
+            showBubble(reminderConfirmText(intent), 3600);
           } else {
             await api.quickSetReminder({
               kind: intent.kind,
               intervalMinutes: intent.intervalMinutes,
             });
+            if (intent.kind === "water") setWaterEnabled(true);
+            if (intent.kind === "stretch") setStretchEnabled(true);
+            showBubble(reminderConfirmText(intent), 3600);
           }
-          showBubble(reminderConfirmText(intent), 3600);
         } catch (err) {
           showBubble(String(err).replace(/^.*Error:\s*/i, "") || "提醒没设上", 2800);
         } finally {
@@ -1248,12 +1276,24 @@ export function PetApp() {
   const runQuickRemind = useCallback(
     async (args: {
       kind: QuickRemindKind;
+      action?: "set" | "cancel";
       title?: string;
       atLocal?: string;
       intervalMinutes?: number;
     }) => {
       setMenuBusy(true);
       try {
+        const action = args.action ?? "set";
+        if (action === "cancel" && (args.kind === "water" || args.kind === "stretch")) {
+          await api.quickDisableReminder(args.kind);
+          if (args.kind === "water") setWaterEnabled(false);
+          else setStretchEnabled(false);
+          showBubble(
+            reminderConfirmText({ action: "cancel", kind: args.kind }),
+            3600,
+          );
+          return;
+        }
         if (args.kind === "meeting") {
           if (!args.atLocal) throw new Error("请选择会议时间");
           const at = new Date(args.atLocal);
@@ -1265,6 +1305,7 @@ export function PetApp() {
           });
           showBubble(
             reminderConfirmText({
+              action: "set",
               kind: "meeting",
               title: args.title || "会议",
               at,
@@ -1278,8 +1319,14 @@ export function PetApp() {
             kind: args.kind,
             intervalMinutes,
           });
+          if (args.kind === "water") setWaterEnabled(true);
+          else setStretchEnabled(true);
           showBubble(
-            reminderConfirmText({ kind: args.kind, intervalMinutes }),
+            reminderConfirmText({
+              action: "set",
+              kind: args.kind,
+              intervalMinutes,
+            }),
             3600,
           );
         }
@@ -1358,7 +1405,7 @@ export function PetApp() {
     }
   }, [infoCard, setPetWindowSize, showBubble]);
 
-  const species = pet?.speciesId ?? "mochi";
+  const species = pet?.speciesId ?? "kaka5";
   const visual = resolveVisualBehavior(behavior);
 
   return (
@@ -1468,6 +1515,8 @@ export function PetApp() {
         busy={menuBusy}
         petName={pet?.name ?? "绒窝"}
         imUnread={imUnread + wechatPending}
+        waterEnabled={waterEnabled}
+        stretchEnabled={stretchEnabled}
         onClose={closeMenu}
         onAction={(a) => void runQuickAction(a)}
         onChat={runQuickChat}

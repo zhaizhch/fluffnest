@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type InteractAction } from "../lib/api";
 import { crossedTier, nextTierProgress } from "../lib/bondTiers";
 import { DAILY_BOND_CAP } from "../lib/careRules";
-import { weekRewardPreview } from "../lib/dailyRewards";
 import {
   categoryDexProgress,
   overallDexProgress,
@@ -18,10 +17,10 @@ import {
 import { PERSONALITIES, personalityLabel } from "../lib/personality";
 import type {
   AppState,
-  ChatMessage,
   ImDraftResult,
   ImMessage,
   ReminderRule,
+  ScheduleJob,
   WechatLoginStart,
   WechatNotifStatus,
   WechatStatus,
@@ -31,15 +30,10 @@ import "./panel.css";
 
 type Tab =
   | "status"
-  | "chat"
   | "roster"
   | "reminders"
-  | "shop"
   | "wechat"
   | "settings";
-
-const COIN_HINT =
-  "金币：提醒打卡 +5 · 登录礼 · 亲密度升档礼 · 小铺花币解锁宠物";
 
 export function PanelApp() {
   const [state, setState] = useState<AppState | null>(null);
@@ -49,10 +43,15 @@ export function PanelApp() {
   );
   const [meetingTitle, setMeetingTitle] = useState("站会");
   const [meetingAt, setMeetingAt] = useState("");
+  const [schTitle, setSchTitle] = useState("晚间天气预报");
+  const [schKind, setSchKind] = useState<"weather_forecast" | "news_brief" | "custom_prompt">(
+    "weather_forecast",
+  );
+  const [schHour, setSchHour] = useState(20);
+  const [schMinute, setSchMinute] = useState(0);
+  const [schPrompt, setSchPrompt] = useState("");
+  const [schChannel, setSchChannel] = useState<"wechat" | "pet">("wechat");
   const [message, setMessage] = useState<string | null>(null);
-  const [chatInput, setChatInput] = useState("");
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [chatBusy, setChatBusy] = useState(false);
   const [fortuneText, setFortuneText] = useState<string | null>(null);
   const [fortuneBusy, setFortuneBusy] = useState(false);
   const [imInbox, setImInbox] = useState<ImMessage[]>([]);
@@ -63,13 +62,11 @@ export function PanelApp() {
   const [draftTarget, setDraftTarget] = useState<ImDraftResult | null>(null);
   const [draftText, setDraftText] = useState("");
   const [draftBusy, setDraftBusy] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
   const wxPollRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
     const s = await api.getState();
     setState(s);
-    setChatHistory(s.chatHistory ?? []);
     setImInbox(s.imInbox ?? []);
   }, []);
 
@@ -132,10 +129,6 @@ export function PanelApp() {
     };
   }, []);
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory, chatBusy]);
-
   const toast = (text: string) => {
     setMessage(text);
     window.setTimeout(() => setMessage(null), 2800);
@@ -191,43 +184,11 @@ export function PanelApp() {
     [state],
   );
 
-  const weekPreview = useMemo(() => weekRewardPreview(), []);
-
-  const affordableHint = useMemo(() => {
-    if (!state) return null;
-    const candidates = state.shopCatalog
-      .filter(
-        (p) =>
-          p.available &&
-          p.currency === "coin" &&
-          p.type === "pet_unlock" &&
-          !state.pets.some((x) => x.speciesId === p.targetId && x.unlocked),
-      )
-      .sort((a, b) => a.amount - b.amount);
-    const buyable = candidates.find((p) => p.amount <= state.wallet.coin);
-    if (buyable) {
-      return `余额够买「${buyable.name}」（${buyable.amount} 币）`;
-    }
-    const cheapest = candidates[0];
-    if (cheapest) {
-      return `再攒 ${cheapest.amount - state.wallet.coin} 币可买「${cheapest.name}」`;
-    }
-    return null;
-  }, [state]);
-
   if (!state || !active) {
     return <div className="panel loading">绒窝加载中…</div>;
   }
 
   const def = petDef(active.speciesId);
-  const daily = state.dailyLogin;
-  // Highlight claimed day in cycle, or pending reward day
-  const highlightDay = daily.claimedToday
-    ? ((((daily.streak - 1) % 7) + 7) % 7) + 1
-    : undefined;
-  const pendingDay = daily.pendingRewards[0]
-    ? weekPreview.find((w) => w.label === daily.pendingRewards[0]?.label)?.day
-    : undefined;
 
   return (
     <div className="panel-scroll">
@@ -236,95 +197,19 @@ export function PanelApp() {
           <div>
             <h1>绒窝</h1>
             <p>
-              FluffNest · 多风格桌宠
+              FluffNest · 暖卡卡
               {state.settings.isAdmin ? " · 管理员" : ""}
             </p>
           </div>
-          <div className="wallet">
-            <span>🪙 {state.wallet.coin}</span>
-            <span>💎 {state.wallet.gem}</span>
-          </div>
         </header>
-
-        <section className="daily-banner">
-          <div className="daily-banner-main">
-            <div>
-              <strong>
-                {daily.claimedToday ? "登录礼已领" : "今日登录礼（请领取）"}
-              </strong>
-              <small>
-                连续 {daily.streak} 天
-                {!daily.claimedToday &&
-                  ` · ${daily.pendingRewards[0]?.label ?? "领取奖励"}`}
-              </small>
-            </div>
-            {!daily.claimedToday && (
-              <button
-                className="primary"
-                onClick={async () => {
-                  try {
-                    const pendingLabel =
-                      daily.pendingRewards[0]?.label ?? "已领取";
-                    const unlockedBefore = state.pets.filter(
-                      (p) => p.unlocked,
-                    ).length;
-                    const coinBefore = state.wallet.coin;
-                    const next = await api.claimDailyLogin();
-                    setState(next);
-                    const unlockedAfter = next.pets.filter(
-                      (p) => p.unlocked,
-                    ).length;
-                    const gained = next.wallet.coin - coinBefore;
-                    const detail =
-                      unlockedAfter > unlockedBefore
-                        ? pendingLabel
-                        : gained > 0
-                          ? gained === 80
-                            ? `已拥有该宠物，折合 +${gained} 币`
-                            : `+${gained} 币`
-                          : pendingLabel;
-                    toast(
-                      `已领取 · 连续 ${next.dailyLogin.streak} 天 · ${detail}`,
-                    );
-                  } catch (e) {
-                    toast(String(e));
-                  }
-                }}
-              >
-                领取
-              </button>
-            )}
-          </div>
-          <div className="week-preview" aria-label="七日登录预览">
-            {weekPreview.map((day) => {
-              const activeDay =
-                pendingDay === day.day ||
-                (daily.claimedToday && highlightDay === day.day);
-              return (
-                <div
-                  key={day.day}
-                  className={`week-day ${activeDay ? "active" : ""} ${
-                    day.kind === "pet" ? "pet" : "coin"
-                  }`}
-                  title={day.label}
-                >
-                  <em>D{day.day}</em>
-                  <span>{day.kind === "pet" ? "宠" : `${day.amount}`}</span>
-                </div>
-              );
-            })}
-          </div>
-        </section>
 
         <nav className="tabs">
           {(
             [
               ["status", "状态"],
               ["wechat", "微信"],
-              ["chat", "对话"],
               ["roster", "图鉴"],
               ["reminders", "提醒"],
-              ["shop", "小铺"],
               ["settings", "设置"],
             ] as const
           ).map(([id, label]) => (
@@ -373,8 +258,7 @@ export function PanelApp() {
                 )}
                 {bondProgress?.next && (
                   <p className="bond-next">
-                    下一档「{bondProgress.next.label}」· 升档礼 +
-                    {bondProgress.next.coinGift} 币
+                    下一档「{bondProgress.next.label}」
                   </p>
                 )}
               </div>
@@ -439,10 +323,9 @@ export function PanelApp() {
               ))}
             </div>
 
-            <p className="hint coin-hint">{COIN_HINT}</p>
             <p className="hint">
               点击宠物或下方按钮互动；开启 AI 后台词会按性格生成。今日好感最多 +
-              {DAILY_BOND_CAP}。登录礼需点「领取」。
+              {DAILY_BOND_CAP}。
             </p>
 
             <h3>今日运势</h3>
@@ -488,7 +371,6 @@ export function PanelApp() {
                     key={action}
                     onClick={async () => {
                       const before = active.bond;
-                      const coinBefore = state.wallet.coin;
                       const bondBeforeDaily = state.dailyCare?.bondGained ?? 0;
                       try {
                         await api.interact(action);
@@ -500,12 +382,9 @@ export function PanelApp() {
                         const crossed = pet
                           ? crossedTier(before, pet.bond)
                           : null;
-                        const gift = next.wallet.coin - coinBefore;
                         const dailyNow = next.dailyCare?.bondGained ?? 0;
-                        if (crossed && gift > 0) {
-                          toast(
-                            `${label} · 关系升温「${crossed.label}」· +${gift} 币`,
-                          );
+                        if (crossed) {
+                          toast(`${label} · 关系升温「${crossed.label}」`);
                         } else if (
                           dailyNow >= DAILY_BOND_CAP &&
                           bondBeforeDaily < DAILY_BOND_CAP
@@ -547,108 +426,6 @@ export function PanelApp() {
                     {p.name}
                   </button>
                 ))}
-            </div>
-          </section>
-        )}
-
-        {tab === "chat" && (
-          <section className="card chat-card">
-            <h2>和 {active.name} 聊天</h2>
-            <p className="hint">
-              回复会按「{personalityLabel(active.personality)}」性格生成，并同步到桌面气泡。
-            </p>
-            {!llmFromSettings(state.settings).enabled && (
-              <p className="hint warn">请先在「设置」里开启 AI 并填写 API Key。</p>
-            )}
-            <div className="chat-log">
-              {chatHistory.length === 0 && (
-                <div className="chat-empty">还没有对话，跟 {active.name} 打个招呼吧。</div>
-              )}
-              {chatHistory.map((m, i) => (
-                <div
-                  key={`${m.at ?? i}-${i}`}
-                  className={`chat-bubble ${m.role === "user" ? "me" : "pet"}`}
-                >
-                  <small>{m.role === "user" ? "你" : active.name}</small>
-                  <p>{m.content}</p>
-                </div>
-              ))}
-              {chatBusy && (
-                <div className="chat-bubble pet thinking">
-                  <small>{active.name}</small>
-                  <p>在想怎么回你…</p>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-            <div className="chat-compose">
-              <input
-                value={chatInput}
-                disabled={chatBusy}
-                placeholder={`跟 ${active.name} 说点什么…`}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={async (e) => {
-                  if (e.key !== "Enter" || e.shiftKey) return;
-                  e.preventDefault();
-                  const text = chatInput.trim();
-                  if (!text || chatBusy) return;
-                  setChatBusy(true);
-                  setChatInput("");
-                  setChatHistory((h) => [
-                    ...h,
-                    { role: "user", content: text, at: new Date().toISOString() },
-                  ]);
-                  try {
-                    const reply = await api.chatWithPet(text);
-                    setChatHistory((h) => [...h, reply]);
-                    await refresh();
-                  } catch (err) {
-                    toast(String(err));
-                    setChatHistory((h) => h.slice(0, -1));
-                    setChatInput(text);
-                  } finally {
-                    setChatBusy(false);
-                  }
-                }}
-              />
-              <button
-                className="primary"
-                disabled={chatBusy || !chatInput.trim()}
-                onClick={async () => {
-                  const text = chatInput.trim();
-                  if (!text || chatBusy) return;
-                  setChatBusy(true);
-                  setChatInput("");
-                  setChatHistory((h) => [
-                    ...h,
-                    { role: "user", content: text, at: new Date().toISOString() },
-                  ]);
-                  try {
-                    const reply = await api.chatWithPet(text);
-                    setChatHistory((h) => [...h, reply]);
-                    await refresh();
-                  } catch (err) {
-                    toast(String(err));
-                    setChatHistory((h) => h.slice(0, -1));
-                    setChatInput(text);
-                  } finally {
-                    setChatBusy(false);
-                  }
-                }}
-              >
-                发送
-              </button>
-            </div>
-            <div className="row chat-actions">
-              <button
-                onClick={async () => {
-                  await api.clearChatHistory();
-                  setChatHistory([]);
-                  toast("已清空对话");
-                }}
-              >
-                清空记录
-              </button>
             </div>
           </section>
         )}
@@ -768,7 +545,7 @@ export function PanelApp() {
           <section className="card">
             <h2>提醒</h2>
             <p className="hint">
-              打卡 +5 币 · 好感最多 +3（计入今日上限）
+              也可对宠物说「取消喝水提醒」或「喝水提醒开了吗」
             </p>
             <div className="list">
               {state.reminders.map((r) => (
@@ -782,15 +559,6 @@ export function PanelApp() {
                   onDelete={async () => {
                     await api.deleteReminder(r.id);
                     await refresh();
-                  }}
-                  onDone={async () => {
-                    try {
-                      await api.completeReminder(r.id);
-                      await refresh();
-                      toast("打卡成功 · +5 币");
-                    } catch (e) {
-                      toast(String(e));
-                    }
                   }}
                 />
               ))}
@@ -820,71 +588,117 @@ export function PanelApp() {
                 添加
               </button>
             </div>
-          </section>
-        )}
 
-        {tab === "shop" && (
-          <section className="card">
-            <h2>绒窝小铺</h2>
-            <p className="hint">{COIN_HINT}</p>
-            {affordableHint && (
-              <p className="hint shop-afford">{affordableHint}</p>
+            <h3>定时推送（微信 / 桌宠）</h3>
+            <p className="hint">
+              例：每晚 20:00 发明日天气到 ClawBot；早 9:00 发过去 24h 资讯简报。微信推送需先给
+              ClawBot 发过消息以绑定会话。也可微信说「每天晚上八点把明天天气发到微信」。
+            </p>
+            <div className="list">
+              {(state.schedules ?? []).map((j) => (
+                <ScheduleRow
+                  key={j.id}
+                  job={j}
+                  onChange={async (next) => {
+                    await api.upsertSchedule(next);
+                    await refresh();
+                  }}
+                  onDelete={async () => {
+                    await api.deleteSchedule(j.id);
+                    await refresh();
+                  }}
+                />
+              ))}
+              {(state.schedules ?? []).length === 0 && (
+                <p className="hint">暂无定时任务</p>
+              )}
+            </div>
+            <div className="row wrap">
+              <select
+                value={schKind}
+                onChange={(e) => {
+                  const k = e.target.value as typeof schKind;
+                  setSchKind(k);
+                  if (k === "weather_forecast") {
+                    setSchTitle("晚间天气预报");
+                    setSchHour(20);
+                  } else if (k === "news_brief") {
+                    setSchTitle("早间资讯简报");
+                    setSchHour(9);
+                  } else {
+                    setSchTitle("自定义推送");
+                  }
+                }}
+              >
+                <option value="weather_forecast">天气预报</option>
+                <option value="news_brief">资讯简报</option>
+                <option value="custom_prompt">自定义</option>
+              </select>
+              <input
+                value={schTitle}
+                onChange={(e) => setSchTitle(e.target.value)}
+                placeholder="标题"
+              />
+              <input
+                type="number"
+                min={0}
+                max={23}
+                value={schHour}
+                onChange={(e) => setSchHour(Number(e.target.value))}
+                style={{ width: 64 }}
+                title="小时"
+              />
+              <span>:</span>
+              <input
+                type="number"
+                min={0}
+                max={59}
+                value={schMinute}
+                onChange={(e) => setSchMinute(Number(e.target.value))}
+                style={{ width: 64 }}
+                title="分钟"
+              />
+              <select
+                value={schChannel}
+                onChange={(e) => setSchChannel(e.target.value as "wechat" | "pet")}
+              >
+                <option value="wechat">发到微信</option>
+                <option value="pet">仅桌宠</option>
+              </select>
+            </div>
+            {schKind === "custom_prompt" && (
+              <textarea
+                value={schPrompt}
+                onChange={(e) => setSchPrompt(e.target.value)}
+                placeholder="自定义推送说明，例如：用温柔语气总结今日待办"
+                rows={2}
+              />
             )}
-            {PET_CATEGORIES.map((cat) => {
-              const products = state.shopCatalog.filter(
-                (p) => petDef(p.targetId)?.category === cat.id,
-              );
-              if (!products.length) return null;
-              return (
-                <div key={cat.id} className="roster-category">
-                  <div className="roster-category-head">
-                    <h3>
-                      {cat.label}
-                      <small>{cat.blurb}</small>
-                    </h3>
-                  </div>
-                  <div className="list">
-                    {products.map((p) => {
-                      const owned =
-                        p.type === "pet_unlock" &&
-                        state.pets.some(
-                          (x) => x.speciesId === p.targetId && x.unlocked,
-                        );
-                      const real = p.currency === "real";
-                      return (
-                        <div key={p.id} className="shop-row">
-                          <div>
-                            <strong>{p.name}</strong>
-                            <small>
-                              {p.rarity} · {p.sku}
-                              {p.iapProductId ? ` · ${p.iapProductId}` : ""}
-                            </small>
-                          </div>
-                          <button
-                            disabled={owned || !p.available || real}
-                            onClick={async () => {
-                              try {
-                                const next = await api.purchaseProduct(p.id);
-                                setState(next);
-                                toast(`已解锁`);
-                              } catch (e) {
-                                toast(String(e));
-                              }
-                            }}
-                          >
-                            {owned
-                              ? "已拥有"
-                              : real || !p.available
-                                ? "即将开放"
-                                : `${p.amount} ${p.currency}`}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
+            <button
+              className="primary"
+              onClick={async () => {
+                const params: Record<string, unknown> = {};
+                if (schKind === "weather_forecast") params.forTomorrow = true;
+                if (schKind === "news_brief") params.lookbackHours = 24;
+                if (schKind === "custom_prompt") params.prompt = schPrompt || schTitle;
+                const job: ScheduleJob = {
+                  id: "",
+                  title: schTitle || "定时推送",
+                  kind: schKind,
+                  channel: schChannel,
+                  enabled: true,
+                  hour: schHour,
+                  minute: schMinute,
+                  daysOfWeek: [],
+                  params,
+                };
+                await api.upsertSchedule(job);
+                await refresh();
+                toast("已添加定时推送");
+              }}
+            >
+              添加定时推送
+            </button>
           </section>
         )}
 
@@ -1362,15 +1176,13 @@ export function PanelApp() {
                   toast(
                     e.target.checked
                       ? "已开启管理员（全解锁）"
-                      : "已关闭管理员（登录礼需手动领取）",
+                      : "已关闭管理员",
                   );
                 }}
               />
               管理员模式（开发用，会全解锁）
             </label>
-            <p className="hint">
-              关闭管理员后，登录宠需通过顶部「领取」获得，不会在打开时自动发放。
-            </p>
+            <p className="hint">仅开发调试用。</p>
 
             <h3>AI 大模型</h3>
             <p className="hint">
@@ -1405,7 +1217,7 @@ export function PanelApp() {
                         void saveLlm({ chatEnabled: e.target.checked })
                       }
                     />
-                    面板对话
+                    跟宠物说话（快捷菜单）
                   </label>
                   <label className="check">
                     <input
@@ -1680,12 +1492,10 @@ function ReminderRow({
   rule,
   onChange,
   onDelete,
-  onDone,
 }: {
   rule: ReminderRule;
   onChange: (r: ReminderRule) => void;
   onDelete: () => void;
-  onDone: () => void;
 }) {
   return (
     <div className="reminder">
@@ -1706,7 +1516,46 @@ function ReminderRow({
           />
           启用
         </label>
-        <button onClick={onDone}>打卡</button>
+        <button onClick={onDelete}>删除</button>
+      </div>
+    </div>
+  );
+}
+
+function ScheduleRow({
+  job,
+  onChange,
+  onDelete,
+}: {
+  job: ScheduleJob;
+  onChange: (j: ScheduleJob) => void;
+  onDelete: () => void;
+}) {
+  const kindLabel =
+    job.kind === "weather_forecast"
+      ? "天气"
+      : job.kind === "news_brief"
+        ? "资讯"
+        : "自定义";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    <div className="reminder">
+      <div>
+        <strong>{job.title}</strong>
+        <small>
+          {kindLabel} · 每天 {pad(job.hour)}:{pad(job.minute)} ·{" "}
+          {job.channel === "wechat" ? "微信" : "桌宠"}
+        </small>
+      </div>
+      <div className="row">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={job.enabled}
+            onChange={(e) => onChange({ ...job, enabled: e.target.checked })}
+          />
+          启用
+        </label>
         <button onClick={onDelete}>删除</button>
       </div>
     </div>

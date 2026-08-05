@@ -63,10 +63,6 @@ export function overallDexProgress(pets: PetInstance[]): {
 export function unlockSourceLabel(speciesId: string): string {
   const d = petDef(speciesId);
   if (!d) return "未解锁";
-  if (d.unlock === "login") return "登录礼解锁";
-  if (d.unlock === "shop") {
-    const price = d.shopPrice ?? 0;
-    return price > 0 ? `小铺 · ${price} 币` : "小铺解锁";
-  }
-  return "默认解锁";
+  if (d.unlock === "default") return "默认解锁";
+  return "未解锁";
 }

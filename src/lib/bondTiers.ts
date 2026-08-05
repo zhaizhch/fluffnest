@@ -1,4 +1,4 @@
-/** Bond relationship tiers — no visual evolution, only dialogue / idle bias / gifts. */
+/** Bond relationship tiers — dialogue / idle bias only (no currency gifts). */
 
 export type BondTierId = 0 | 1 | 2 | 3 | 4;
 
@@ -6,8 +6,6 @@ export type BondTier = {
   id: BondTierId;
   minBond: number;
   label: string;
-  /** Coin gift when crossing INTO this tier (tier 0 has none). */
-  coinGift: number;
   lines: string[];
   /** Behaviors weighted into soft idle at this tier. */
   idleBias: string[];
@@ -18,7 +16,6 @@ export const BOND_TIERS: BondTier[] = [
     id: 0,
     minBond: 0,
     label: "初识",
-    coinGift: 0,
     lines: ["你好呀…", "第一次见面。", "我会乖乖待着。"],
     idleBias: ["look", "nod", "sit"],
   },
@@ -26,7 +23,6 @@ export const BOND_TIERS: BondTier[] = [
     id: 1,
     minBond: 20,
     label: "熟悉",
-    coinGift: 8,
     lines: ["又见面了。", "今天也在忙吗？", "记得歇一会儿。"],
     idleBias: ["wave", "look", "nod", "stretch"],
   },
@@ -34,7 +30,6 @@ export const BOND_TIERS: BondTier[] = [
     id: 2,
     minBond: 60,
     label: "好友",
-    coinGift: 12,
     lines: ["嘿嘿，是你。", "陪我玩一会儿？", "你来啦，好开心。"],
     idleBias: ["wave", "cheer", "look", "nuzzle"],
   },
@@ -42,7 +37,6 @@ export const BOND_TIERS: BondTier[] = [
     id: 3,
     minBond: 120,
     label: "挚友",
-    coinGift: 20,
     lines: ["就知道你会来。", "贴贴～", "只想待在你旁边。", "再理理我？"],
     idleBias: ["nuzzle", "wave", "look", "cheer"],
   },
@@ -50,7 +44,6 @@ export const BOND_TIERS: BondTier[] = [
     id: 4,
     minBond: 220,
     label: "心灵相通",
-    coinGift: 35,
     lines: [
       "你手好暖。",
       "今天也要黏着你。",
@@ -60,9 +53,6 @@ export const BOND_TIERS: BondTier[] = [
     idleBias: ["nuzzle", "wave", "look", "cheer"],
   },
 ];
-
-/** Coin gifts for tiers 1..4 — must match Rust interact(). */
-export const TIER_COIN_GIFTS = [0, 8, 12, 20, 35] as const;
 
 export function tierFromBond(bond: number): BondTier {
   let current = BOND_TIERS[0]!;

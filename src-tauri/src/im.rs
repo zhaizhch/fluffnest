@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
-const INBOX_CAP: usize = 50;
+const INBOX_CAP_UNREAD: usize = 200;
+/// Keep at most this many acknowledged (read) messages, newest last.
+const INBOX_READ_KEEP: usize = 3;
 const DEDUP_WINDOW: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
@@ -208,9 +210,15 @@ pub fn ingest_message(app: &AppHandle, req: ImIngestRequest) -> Result<Option<Im
         let shared = app.state::<SharedState>();
         let mut guard = shared.0.lock().map_err(|e| e.to_string())?;
         guard.im_inbox.push(msg.clone());
-        if guard.im_inbox.len() > INBOX_CAP {
-            let drain = guard.im_inbox.len() - INBOX_CAP;
-            guard.im_inbox.drain(0..drain);
+        trim_im_inbox(&mut guard.im_inbox);
+        // Bind proactive WeChat push target to latest ClawBot peer.
+        if req.source == "clawbot" {
+            if let (Some(peer), Some(token)) = (&req.peer_user_id, &req.context_token) {
+                if !peer.trim().is_empty() && !token.trim().is_empty() {
+                    guard.wechat_auth.owner_peer_id = Some(peer.trim().to_string());
+                    guard.wechat_auth.owner_context_token = Some(token.trim().to_string());
+                }
+            }
         }
         if let Some((title, at, interval)) = reminder_hint {
             let rule = ReminderRule {
@@ -361,16 +369,24 @@ fn auto_chat_reply(app: &AppHandle, user_message: &str, peer_user_id: &str) -> R
         return Err("大模型未开启".into());
     }
     let history = guard.chat_history.clone();
+    let host = crate::commands::host_snapshot_json(&guard);
     drop(guard);
 
-    // Full agent: rules / skills / tools / memory / cycle.
-    let reply = llm::generate_wechat_agent_reply(
+    // Full agent: rules / skills / tools / memory / cycle + host actions.
+    let (reply, host_actions) = llm::generate_wechat_agent_reply(
         &llm,
         &pet,
         &history,
         user_message,
         Some(peer_user_id),
+        Some(host),
     )?;
+
+    if !host_actions.is_empty() {
+        let notes = crate::commands::apply_host_actions(app, &host_actions);
+        eprintln!("[im] host actions applied: {notes:?}");
+    }
+
     let shared = app.state::<SharedState>();
     let mut guard = shared.0.lock().map_err(|e| e.to_string())?;
     guard.chat_history.push(llm::ChatMessage {
@@ -516,6 +532,7 @@ pub fn acknowledge(app: &AppHandle, message_id: &str) -> Result<(), String> {
     let mut guard = shared.0.lock().map_err(|e| e.to_string())?;
     if let Some(msg) = guard.im_inbox.iter_mut().find(|m| m.id == message_id) {
         msg.acknowledged = true;
+        trim_im_inbox(&mut guard.im_inbox);
         crate::state::save_state(app, &guard)?;
         let _ = app.emit("im-inbox-updated", ());
     }
@@ -533,6 +550,7 @@ pub fn acknowledge_all(app: &AppHandle) -> Result<usize, String> {
         }
     }
     if n > 0 {
+        trim_im_inbox(&mut guard.im_inbox);
         crate::state::save_state(app, &guard)?;
         let _ = app.emit("im-inbox-updated", ());
     }
@@ -616,12 +634,39 @@ pub fn prune_noise_inbox(app: &AppHandle) -> Result<usize, String> {
             .retain(|m| !noise_ids.iter().any(|id| id == &m.id));
         changed = true;
     }
+    let before_trim = guard.im_inbox.len();
+    trim_im_inbox(&mut guard.im_inbox);
+    if guard.im_inbox.len() != before_trim {
+        changed = true;
+    }
     let removed = before.saturating_sub(guard.im_inbox.len());
     if changed {
         crate::state::save_state(app, &guard)?;
         let _ = app.emit("im-inbox-updated", ());
     }
     Ok(removed)
+}
+
+/// Keep all unread messages; keep only the newest `INBOX_READ_KEEP` read ones.
+/// Soft-cap unread at `INBOX_CAP_UNREAD` (drop oldest unread if exceeded).
+fn trim_im_inbox(inbox: &mut Vec<crate::state::ImMessage>) {
+    let mut unread: Vec<_> = inbox.iter().filter(|m| !m.acknowledged).cloned().collect();
+    let mut read: Vec<_> = inbox.iter().filter(|m| m.acknowledged).cloned().collect();
+
+    if unread.len() > INBOX_CAP_UNREAD {
+        let drain = unread.len() - INBOX_CAP_UNREAD;
+        unread.drain(0..drain);
+    }
+    if read.len() > INBOX_READ_KEEP {
+        let drain = read.len() - INBOX_READ_KEEP;
+        read.drain(0..drain);
+    }
+
+    // Preserve chronological order (oldest → newest) by received_at when possible.
+    let mut merged = unread;
+    merged.extend(read);
+    merged.sort_by(|a, b| a.received_at.cmp(&b.received_at));
+    *inbox = merged;
 }
 
 pub fn copy_clipboard(text: &str) -> Result<(), String> {

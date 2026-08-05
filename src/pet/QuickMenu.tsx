@@ -9,12 +9,15 @@ type Props = {
   busy: boolean;
   petName: string;
   imUnread?: number;
+  waterEnabled?: boolean;
+  stretchEnabled?: boolean;
   onClose: () => void;
   onAction: (action: Exclude<QuickAction, "chat" | "wechat">) => void;
   onChat: (text: string) => Promise<void> | void;
   onWechat?: () => Promise<void> | void;
   onRemind: (args: {
     kind: QuickRemindKind;
+    action?: "set" | "cancel";
     title?: string;
     atLocal?: string;
     intervalMinutes?: number;
@@ -44,6 +47,8 @@ export function QuickMenu({
   busy,
   petName,
   imUnread = 0,
+  waterEnabled = true,
+  stretchEnabled = true,
   onClose,
   onAction,
   onChat,
@@ -88,7 +93,12 @@ export function QuickMenu({
 
   const runRemind = async (
     kind: QuickRemindKind,
-    extra?: { title?: string; atLocal?: string; intervalMinutes?: number },
+    extra?: {
+      action?: "set" | "cancel";
+      title?: string;
+      atLocal?: string;
+      intervalMinutes?: number;
+    },
   ) => {
     if (locked) return;
     setSending(true);
@@ -112,7 +122,7 @@ export function QuickMenu({
       }}
     >
       <header className="quick-menu-head">
-        <span>{view === "remind" ? "设个提醒" : `和 ${petName}`}</span>
+        <span>{view === "remind" ? "提醒" : `和 ${petName}`}</span>
         <button
           type="button"
           className="quick-menu-close"
@@ -159,8 +169,8 @@ export function QuickMenu({
               disabled={locked}
               onClick={() => setView("remind")}
             >
-              <strong>设提醒</strong>
-              <small>喝水 · 久坐 · 会议</small>
+              <strong>提醒</strong>
+              <small>设 / 关 · 喝水 · 久坐</small>
             </button>
           </div>
 
@@ -169,7 +179,7 @@ export function QuickMenu({
               ref={inputRef}
               value={draft}
               disabled={locked}
-              placeholder={`跟 ${petName} 说…也可说「提醒我喝水」`}
+              placeholder={`也可说「取消喝水提醒」`}
               maxLength={120}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -195,21 +205,31 @@ export function QuickMenu({
           <div className="quick-remind-row">
             <button
               type="button"
-              className="quick-chip"
+              className={`quick-chip${waterEnabled ? " on" : ""}`}
               disabled={locked}
-              onClick={() => void runRemind("water", { intervalMinutes: 60 })}
+              onClick={() =>
+                void runRemind("water", {
+                  action: waterEnabled ? "cancel" : "set",
+                  intervalMinutes: 60,
+                })
+              }
             >
-              喝水
-              <small>每 60 分</small>
+              喝水 · {waterEnabled ? "开" : "关"}
+              <small>{waterEnabled ? "点此关闭" : "每 60 分"}</small>
             </button>
             <button
               type="button"
-              className="quick-chip"
+              className={`quick-chip${stretchEnabled ? " on" : ""}`}
               disabled={locked}
-              onClick={() => void runRemind("stretch", { intervalMinutes: 45 })}
+              onClick={() =>
+                void runRemind("stretch", {
+                  action: stretchEnabled ? "cancel" : "set",
+                  intervalMinutes: 45,
+                })
+              }
             >
-              久坐
-              <small>每 45 分</small>
+              久坐 · {stretchEnabled ? "开" : "关"}
+              <small>{stretchEnabled ? "点此关闭" : "每 45 分"}</small>
             </button>
           </div>
 
@@ -239,6 +259,7 @@ export function QuickMenu({
               disabled={locked || !meetingTitle.trim() || !meetingAt}
               onClick={() =>
                 void runRemind("meeting", {
+                  action: "set",
                   title: meetingTitle.trim(),
                   atLocal: meetingAt,
                 })

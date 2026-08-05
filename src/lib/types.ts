@@ -78,6 +78,49 @@ export type ReminderRule = {
   lastFiredAt?: string | null;
 };
 
+export type ScheduleJob = {
+  id: string;
+  title: string;
+  /** weather_forecast | news_brief | custom_prompt */
+  kind: string;
+  /** wechat | pet */
+  channel: string;
+  enabled: boolean;
+  hour: number;
+  minute: number;
+  daysOfWeek?: number[];
+  params?: Record<string, unknown>;
+  lastFiredDate?: string | null;
+};
+
+export type ReminderStatus = {
+  water?: {
+    id: string;
+    type: string;
+    title?: string | null;
+    enabled: boolean;
+    intervalMinutes?: number | null;
+    at?: string | null;
+  } | null;
+  stretch?: {
+    id: string;
+    type: string;
+    title?: string | null;
+    enabled: boolean;
+    intervalMinutes?: number | null;
+    at?: string | null;
+  } | null;
+  meetings: Array<{
+    id: string;
+    type: string;
+    title?: string | null;
+    enabled: boolean;
+    intervalMinutes?: number | null;
+    at?: string | null;
+  }>;
+  summary: string;
+};
+
 export type ShopProduct = {
   id: string;
   sku: string;
@@ -140,6 +183,8 @@ export type WechatAuth = {
   baseUrl?: string;
   getUpdatesBuf?: string;
   accountLabel?: string | null;
+  ownerPeerId?: string | null;
+  ownerContextToken?: string | null;
 };
 
 export type ImMessage = {
@@ -260,13 +305,17 @@ export const DEFAULT_WECHAT_SETTINGS: WechatSettings = {
 export type AppState = {
   pets: PetInstance[];
   reminders: ReminderRule[];
-  wallet: Wallet;
+  schedules?: ScheduleJob[];
+  /** @deprecated economy removed; kept for old save files */
+  wallet?: Wallet;
   ownedActions: OwnedAction[];
-  dailyLogin: DailyLogin;
+  /** @deprecated daily login removed */
+  dailyLogin?: DailyLogin;
   dailyCare?: DailyCare;
   careRevision?: number;
   settings: Settings;
-  shopCatalog: ShopProduct[];
+  /** @deprecated shop removed */
+  shopCatalog?: ShopProduct[];
   chatHistory?: ChatMessage[];
   wechatAuth?: WechatAuth;
   imInbox?: ImMessage[];

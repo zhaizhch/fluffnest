@@ -7,8 +7,9 @@ import type {
   PetInstance,
   PetSaysPayload,
   ReminderRule,
+  ReminderStatus,
+  ScheduleJob,
   Settings,
-  Wallet,
   WechatLoginStart,
   WechatNotifStatus,
   WechatStatus,
@@ -52,13 +53,19 @@ export const api = {
       at: args.at ?? null,
       intervalMinutes: args.intervalMinutes ?? null,
     }),
+  quickDisableReminder: (kind: "water" | "stretch" | string, id?: string | null) =>
+    invoke<ReminderRule>("quick_disable_reminder", {
+      kind,
+      id: id ?? null,
+    }),
+  reminderStatus: () => invoke<ReminderStatus>("reminder_status"),
   deleteReminder: (id: string) =>
     invoke<ReminderRule[]>("delete_reminder", { id }),
-  completeReminder: (id: string) =>
-    invoke<Wallet>("complete_reminder", { id }),
-  purchaseProduct: (productId: string) =>
-    invoke<AppState>("purchase_product", { productId }),
-  claimDailyLogin: () => invoke<AppState>("claim_daily_login"),
+  upsertSchedule: (job: ScheduleJob) =>
+    invoke<ScheduleJob[]>("upsert_schedule", { job }),
+  deleteSchedule: (id: string) =>
+    invoke<ScheduleJob[]>("delete_schedule", { id }),
+  listSchedules: () => invoke<ScheduleJob[]>("list_schedules"),
   tickIdle: () => invoke<PetInstance>("tick_idle"),
   getOwnedActions: () => invoke<string[]>("get_owned_actions"),
   generatePetLine: (kind: string, action: string, extra?: string) =>

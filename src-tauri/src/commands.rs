@@ -1,8 +1,10 @@
 use crate::state::{
-    prepare_daily_login, reward_for_streak, save_state, sync_daily_care, take_bond_budget,
-    today_string, AppState, DailyLogin, OwnedAction, PetInstance, ReminderRule, Settings, Wallet,
+    save_state, sync_daily_care, take_bond_budget, today_string, AppState, PetInstance,
+    ReminderRule, ScheduleJob, Settings,
 };
 use chrono::{Datelike, Utc};
+use serde::Serialize;
+use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
@@ -20,26 +22,10 @@ where
     Ok(result)
 }
 
-fn unlock_action(state: &mut AppState, action_id: &str) {
-    if !state.owned_actions.iter().any(|a| a.action_id == action_id) {
-        state.owned_actions.push(OwnedAction {
-            action_id: action_id.into(),
-            obtained_at: Utc::now().to_rfc3339(),
-        });
-    }
-}
-
-fn unlock_pet(state: &mut AppState, species_id: &str) {
-    if let Some(p) = state.pets.iter_mut().find(|p| p.species_id == species_id) {
-        p.unlocked = true;
-    }
-}
-
 #[tauri::command]
 pub fn get_state(app: AppHandle) -> Result<AppState, String> {
     let shared = app.state::<SharedState>();
     let mut guard = shared.0.lock().map_err(|e| e.to_string())?;
-    prepare_daily_login(&mut guard);
     sync_daily_care(&mut guard);
     Ok(guard.clone())
 }
@@ -86,18 +72,6 @@ pub fn interact(app: AppHandle, action: String) -> Result<PetInstance, String> {
         let gained = take_bond_budget(state, bond_want);
         state.pets[idx].bond += gained;
 
-        let mut gift = 0i32;
-        let thresholds: &[(i32, i32)] = &[(20, 8), (60, 12), (120, 20), (220, 35)];
-        for &(min_bond, coins) in thresholds {
-            if bond_before < min_bond && state.pets[idx].bond >= min_bond {
-                gift = coins;
-            }
-        }
-        if gift > 0 {
-            state.wallet.coin += gift;
-            let _ = app.emit("wallet-updated", state.wallet.clone());
-        }
-
         let snapshot = state.pets[idx].clone();
         let _ = app.emit("pet-updated", snapshot.clone());
         let _ = app.emit(
@@ -105,10 +79,13 @@ pub fn interact(app: AppHandle, action: String) -> Result<PetInstance, String> {
             serde_json::json!({
                 "action": action,
                 "speciesId": snapshot.species_id,
-                "bondGift": gift,
                 "bond": snapshot.bond,
                 "bondGained": gained,
                 "bondCapped": bond_want > 0 && gained < bond_want,
+                "tierCrossed": bond_before < snapshot.bond
+                    && [(20, "熟悉"), (60, "好友"), (120, "挚友"), (220, "心灵相通")]
+                        .iter()
+                        .any(|&(min, _)| bond_before < min && snapshot.bond >= min),
             }),
         );
         Ok(snapshot)
@@ -124,7 +101,7 @@ pub fn switch_pet(app: AppHandle, pet_id: String) -> Result<PetInstance, String>
             .find(|p| p.id == pet_id)
             .ok_or_else(|| "pet not found".to_string())?;
         if !target.unlocked {
-            return Err("pet locked — claim daily login or buy in shop".into());
+            return Err("宠物未解锁".into());
         }
         for p in state.pets.iter_mut() {
             p.is_active = p.id == pet_id;
@@ -331,147 +308,199 @@ pub fn delete_reminder(app: AppHandle, id: String) -> Result<Vec<ReminderRule>, 
     })
 }
 
+/// Disable water / stretch (or a meeting by id) without deleting the rule.
 #[tauri::command]
-pub fn complete_reminder(app: AppHandle, id: String) -> Result<Wallet, String> {
+pub fn quick_disable_reminder(
+    app: AppHandle,
+    kind: String,
+    id: Option<String>,
+) -> Result<ReminderRule, String> {
     with_state(&app, |state| {
-        sync_daily_care(state);
-        let idx = state
-            .pets
-            .iter()
-            .position(|p| p.is_active && p.unlocked)
-            .ok_or_else(|| "no active pet".to_string())?;
-
-        if let Some(rule) = state.reminders.iter_mut().find(|r| r.id == id) {
-            rule.last_fired_at = Some(Utc::now().to_rfc3339());
+        let target_id = id.unwrap_or_else(|| match kind.as_str() {
+            "water" => "rem-water".into(),
+            "stretch" => "rem-stretch".into(),
+            other => other.to_string(),
+        });
+        if let Some(rule) = state
+            .reminders
+            .iter_mut()
+            .find(|r| r.id == target_id || r.r#type == kind)
+        {
+            rule.enabled = false;
+            return Ok(rule.clone());
         }
+        Err(format!("未找到提醒: {kind}"))
+    })
+}
 
-        let gained = take_bond_budget(state, 3);
-        state.pets[idx].bond += gained;
-        state.pets[idx].mood = (state.pets[idx].mood + 5).min(100);
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderStatusItem {
+    pub id: String,
+    pub r#type: String,
+    pub title: Option<String>,
+    pub enabled: bool,
+    pub interval_minutes: Option<i32>,
+    pub at: Option<String>,
+}
 
-        state.wallet.coin += 5;
-        let snapshot = state.pets[idx].clone();
-        let _ = app.emit("pet-updated", snapshot);
-        let _ = app.emit("wallet-updated", state.wallet.clone());
-        Ok(state.wallet.clone())
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderStatus {
+    pub water: Option<ReminderStatusItem>,
+    pub stretch: Option<ReminderStatusItem>,
+    pub meetings: Vec<ReminderStatusItem>,
+    pub summary: String,
+}
+
+#[tauri::command]
+pub fn reminder_status(app: AppHandle) -> Result<ReminderStatus, String> {
+    let shared = app.state::<SharedState>();
+    let guard = shared.0.lock().map_err(|e| e.to_string())?;
+    Ok(build_reminder_status(&guard.reminders))
+}
+
+pub fn build_reminder_status(reminders: &[ReminderRule]) -> ReminderStatus {
+    let to_item = |r: &ReminderRule| ReminderStatusItem {
+        id: r.id.clone(),
+        r#type: r.r#type.clone(),
+        title: r.title.clone(),
+        enabled: r.enabled,
+        interval_minutes: r.interval_minutes,
+        at: r.at.clone(),
+    };
+    let water = reminders.iter().find(|r| r.id == "rem-water" || r.r#type == "water").map(to_item);
+    let stretch = reminders
+        .iter()
+        .find(|r| r.id == "rem-stretch" || r.r#type == "stretch")
+        .map(to_item);
+    let meetings: Vec<_> = reminders
+        .iter()
+        .filter(|r| r.r#type == "meeting" && r.enabled)
+        .map(to_item)
+        .collect();
+    let fmt = |item: &Option<ReminderStatusItem>, label: &str| match item {
+        Some(r) if r.enabled => format!(
+            "{label}：开着（每 {} 分）",
+            r.interval_minutes.unwrap_or(0)
+        ),
+        Some(_) => format!("{label}：关着"),
+        None => format!("{label}：未设置"),
+    };
+    let mut parts = vec![fmt(&water, "喝水"), fmt(&stretch, "久坐")];
+    if !meetings.is_empty() {
+        parts.push(format!("会议：{} 条进行中", meetings.len()));
+    }
+    ReminderStatus {
+        water,
+        stretch,
+        meetings,
+        summary: parts.join(" · "),
+    }
+}
+
+#[tauri::command]
+pub fn upsert_schedule(app: AppHandle, job: ScheduleJob) -> Result<Vec<ScheduleJob>, String> {
+    with_state(&app, |state| {
+        crate::schedules::upsert_job(state, job);
+        Ok(state.schedules.clone())
     })
 }
 
 #[tauri::command]
-pub fn purchase_product(app: AppHandle, product_id: String) -> Result<AppState, String> {
+pub fn delete_schedule(app: AppHandle, id: String) -> Result<Vec<ScheduleJob>, String> {
     with_state(&app, |state| {
-        let product = state
-            .shop_catalog
-            .iter()
-            .find(|p| p.id == product_id)
-            .cloned()
-            .ok_or_else(|| "product not found".to_string())?;
-
-        if !product.available {
-            return Err("product unavailable (coming soon)".into());
-        }
-        if product.currency == "real" {
-            return Err("real IAP not enabled in v1".into());
-        }
-
-        let already = match product.r#type.as_str() {
-            "action" => state
-                .owned_actions
-                .iter()
-                .any(|a| a.action_id == product.target_id),
-            "pet_unlock" => state
-                .pets
-                .iter()
-                .any(|p| p.species_id == product.target_id && p.unlocked),
-            _ => false,
-        };
-        if already {
-            return Err("already owned".into());
-        }
-
-        match product.currency.as_str() {
-            "coin" => {
-                if state.wallet.coin < product.amount {
-                    return Err("insufficient coin".into());
-                }
-                state.wallet.coin -= product.amount;
-            }
-            "gem" => {
-                if state.wallet.gem < product.amount {
-                    return Err("insufficient gem".into());
-                }
-                state.wallet.gem -= product.amount;
-            }
-            _ => return Err("unsupported currency".into()),
-        }
-
-        match product.r#type.as_str() {
-            "action" => unlock_action(state, &product.target_id),
-            "pet_unlock" => unlock_pet(state, &product.target_id),
-            _ => return Err("unsupported product type".into()),
-        }
-
-        Ok(state.clone())
+        crate::schedules::delete_job(state, &id);
+        Ok(state.schedules.clone())
     })
 }
 
 #[tauri::command]
-pub fn claim_daily_login(app: AppHandle) -> Result<AppState, String> {
-    with_state(&app, |state| {
-        prepare_daily_login(state);
-        if state.daily_login.claimed_today {
-            return Err("already claimed today".into());
-        }
+pub fn list_schedules(app: AppHandle) -> Result<Vec<ScheduleJob>, String> {
+    let shared = app.state::<SharedState>();
+    let guard = shared.0.lock().map_err(|e| e.to_string())?;
+    Ok(guard.schedules.clone())
+}
 
-        let today = today_string();
-        let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1))
-            .format("%Y-%m-%d")
+/// Build host snapshot JSON for the WeChat agent.
+pub fn host_snapshot_json(state: &AppState) -> Value {
+    let reminders: Vec<Value> = state
+        .reminders
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "type": r.r#type,
+                "title": r.title,
+                "enabled": r.enabled,
+                "intervalMinutes": r.interval_minutes,
+                "at": r.at,
+            })
+        })
+        .collect();
+    let schedules: Vec<Value> = state
+        .schedules
+        .iter()
+        .map(|j| {
+            json!({
+                "id": j.id,
+                "title": j.title,
+                "kind": j.kind,
+                "channel": j.channel,
+                "enabled": j.enabled,
+                "hour": j.hour,
+                "minute": j.minute,
+                "daysOfWeek": j.days_of_week,
+                "params": j.params,
+            })
+        })
+        .collect();
+    let owner_ready = state
+        .wechat_auth
+        .owner_peer_id
+        .as_ref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+        && state
+            .wechat_auth
+            .owner_context_token
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+    json!({
+        "reminders": reminders,
+        "schedules": schedules,
+        "ownerReady": owner_ready,
+        "reminderSummary": build_reminder_status(&state.reminders).summary,
+    })
+}
+
+pub fn apply_host_actions(app: &AppHandle, actions: &[Value]) -> Vec<String> {
+    if actions.is_empty() {
+        return Vec::new();
+    }
+    let shared = app.state::<SharedState>();
+    let mut guard = match shared.0.lock() {
+        Ok(g) => g,
+        Err(e) => return vec![format!("lock error: {e}")],
+    };
+    let mut notes = Vec::new();
+    for action in actions {
+        let op = action
+            .get("op")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
             .to_string();
-        let next_streak = match &state.daily_login.last_claim_date {
-            Some(prev) if prev == &yesterday => state.daily_login.streak + 1,
-            Some(prev) if prev == &today => state.daily_login.streak,
-            _ => 1,
-        };
-
-        let reward = reward_for_streak(next_streak);
-        let mut applied = reward.clone();
-        match reward.kind.as_str() {
-            "coin" => state.wallet.coin += reward.amount,
-            "action" => unlock_action(state, &reward.target_id),
-            "pet" => {
-                let already = state
-                    .pets
-                    .iter()
-                    .any(|p| p.species_id == reward.target_id && p.unlocked);
-                if already {
-                    const FALLBACK: i32 = 80;
-                    state.wallet.coin += FALLBACK;
-                    applied.kind = "coin".into();
-                    applied.target_id = "coin".into();
-                    applied.amount = FALLBACK;
-                    applied.label = format!(
-                        "已拥有该宠物，折合金币 ×{}",
-                        FALLBACK
-                    );
-                } else {
-                    unlock_pet(state, &reward.target_id);
-                }
-            }
-            _ => {}
-        }
-
-        state.daily_login = DailyLogin {
-            last_claim_date: Some(today),
-            streak: next_streak,
-            total_days: state.daily_login.total_days + 1,
-            pending_rewards: vec![],
-            claimed_today: true,
-        };
-
-        let _ = app.emit("daily-claimed", applied);
-        let _ = app.emit("wallet-updated", state.wallet.clone());
-        Ok(state.clone())
-    })
+        let args = action
+            .get("args")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_else(Map::new);
+        let note = crate::schedules::apply_host_action(&mut guard, &op, &args);
+        notes.push(note);
+    }
+    let _ = save_state(app, &guard);
+    notes
 }
 
 #[tauri::command]
