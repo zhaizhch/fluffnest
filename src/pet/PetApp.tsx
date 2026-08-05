@@ -72,6 +72,18 @@ function sleep(ms: number) {
   });
 }
 
+/** How long a speech bubble stays — scales with text so replies stay readable. */
+function bubbleDisplayMs(
+  text: string,
+  opts?: { min?: number; max?: number },
+): number {
+  const min = opts?.min ?? 5600;
+  const max = opts?.max ?? 20000;
+  // ~reading pace for short Chinese lines; longer replies get more time.
+  const byLen = 3200 + Math.ceil(text.trim().length * 180);
+  return Math.min(max, Math.max(min, byLen));
+}
+
 export function PetApp() {
   const [pet, setPet] = useState<PetInstance | null>(null);
   const [behavior, setBehavior] = useState<PetBehavior>("idle");
@@ -136,10 +148,11 @@ export function PetApp() {
     petRef.current = pet;
   }, [pet]);
 
-  const showBubble = useCallback((text: string, ms = 2400) => {
+  const showBubble = useCallback((text: string, ms?: number) => {
     setBubble(text);
     if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current);
-    bubbleTimer.current = window.setTimeout(() => setBubble(null), ms);
+    const hold = ms ?? bubbleDisplayMs(text);
+    bubbleTimer.current = window.setTimeout(() => setBubble(null), hold);
   }, []);
 
   const flushPendingWechat = useCallback(() => {
@@ -290,7 +303,12 @@ export function PetApp() {
             .then((line) => {
               // Only drop if a newer click already requested a line
               if (req !== llmReqId.current) return;
-              if (line?.trim()) showBubble(line.trim(), Math.max(holdMs, 4200));
+              if (line?.trim()) {
+                showBubble(
+                  line.trim(),
+                  Math.max(holdMs, bubbleDisplayMs(line.trim())),
+                );
+              }
             })
             .catch((err) => {
               if (req !== llmReqId.current) return;
@@ -299,7 +317,7 @@ export function PetApp() {
               showBubble(
                 String(err).replace(/^.*Error:\s*/i, "").slice(0, 36) ||
                   (fallback ?? "AI 暂时没回上"),
-                2800,
+                4000,
               );
             });
         })
@@ -311,7 +329,12 @@ export function PetApp() {
             .generatePetLine(kind, actionLabel(action))
             .then((line) => {
               if (req !== llmReqId.current) return;
-              if (line?.trim()) showBubble(line.trim(), Math.max(holdMs, 4200));
+              if (line?.trim()) {
+                showBubble(
+                  line.trim(),
+                  Math.max(holdMs, bubbleDisplayMs(line.trim())),
+                );
+              }
             })
             .catch(console.error);
         });
@@ -392,7 +415,10 @@ export function PetApp() {
 
         if (opts?.userInitiated) {
           if (step.bubble) {
-            showBubble(step.bubble, Math.min(ms, 2800));
+            const hold = opts.skipLlm
+              ? bubbleDisplayMs(step.bubble)
+              : bubbleDisplayMs(step.bubble, { min: 4200, max: 12000 });
+            showBubble(step.bubble, hold);
             if (!opts.skipLlm && !askedLlm && !step.bubble.startsWith("⏰")) {
               askedLlm = true;
               enrichBubbleWithLlm(
@@ -400,7 +426,7 @@ export function PetApp() {
                 step.behavior,
                 step.bubble,
                 gen,
-                Math.min(ms, 3200),
+                hold,
               );
             }
           } else if (i === 0 || Math.random() < (step.bubbleChance ?? 0.7)) {
@@ -410,6 +436,7 @@ export function PetApp() {
                 : null) ??
               pickBubble(speciesId, step.behavior) ??
               pickClingyLine();
+            const hold = bubbleDisplayMs(line, { min: 4200, max: 12000 });
             if (!opts.skipLlm && !askedLlm) {
               askedLlm = true;
               enrichBubbleWithLlm(
@@ -417,20 +444,25 @@ export function PetApp() {
                 step.behavior,
                 line,
                 gen,
-                Math.min(ms, 3200),
+                hold,
               );
             } else {
-              showBubble(line, Math.min(ms, 2800));
+              showBubble(line, hold);
             }
           }
         } else {
           // Soft idle: local bubbles only — never call LLM (keeps UI snappy).
           const chance = step.bubbleChance ?? 0;
           if (step.bubble) {
-            showBubble(step.bubble, Math.min(ms, 2800));
+            showBubble(
+              step.bubble,
+              bubbleDisplayMs(step.bubble, { min: 3600, max: 9000 }),
+            );
           } else if (chance > 0 && Math.random() < chance) {
             const line = pickBubble(speciesId, step.behavior);
-            if (line) showBubble(line, Math.min(ms, 2800));
+            if (line) {
+              showBubble(line, bubbleDisplayMs(line, { min: 3600, max: 9000 }));
+            }
           }
         }
 
@@ -600,7 +632,7 @@ export function PetApp() {
         void getCurrentWindow()
           .setSize(new LogicalSize(WECHAT_SIZE.w, WECHAT_SIZE.h))
           .catch(() => undefined);
-        showBubble(payload.text, 4200);
+        showBubble(payload.text, bubbleDisplayMs(payload.text));
         if (mid) {
           void api
             .draftImReply(mid)
@@ -662,7 +694,7 @@ export function PetApp() {
         return;
       }
 
-      showBubble(payload.text, 4200);
+      showBubble(payload.text, bubbleDisplayMs(payload.text));
       if (species === "rising") {
         void runRisingSteps(
           [
@@ -773,7 +805,7 @@ export function PetApp() {
           const species = petRef.current?.speciesId ?? "kaka5";
           const line = e.payload.bubble ?? `⏰ ${e.payload.title}`;
           if (species === "rising") {
-            showBubble(line, 3600);
+            showBubble(line, bubbleDisplayMs(line));
             void runRisingStepsRef.current(
               [
                 { action: "Hello", durationMs: 2000 },
@@ -803,7 +835,7 @@ export function PetApp() {
               .generatePetLine("reminder", e.payload.title)
               .then((ai) => {
                 if (req !== llmReqId.current) return;
-                if (ai?.trim()) showBubble(ai.trim(), 3600);
+                if (ai?.trim()) showBubble(ai.trim(), bubbleDisplayMs(ai.trim()));
               })
               .catch(() => undefined);
           }
@@ -854,7 +886,7 @@ export function PetApp() {
           card && card.kind === kind ? { ...card, tip: tip.trim() } : card,
         );
         if (kind === "weather" || kind === "news") {
-          showBubble(tip.trim(), 3600);
+          showBubble(tip.trim(), bubbleDisplayMs(tip.trim()));
         }
       }),
     ];
@@ -1081,14 +1113,14 @@ export function PetApp() {
             .generatePetLine("click", "摸摸")
             .then((line) => {
               if (req !== llmReqId.current) return;
-              if (line?.trim()) showBubble(line.trim(), 4200);
+              if (line?.trim()) showBubble(line.trim(), bubbleDisplayMs(line.trim()));
             })
             .catch((err) => {
               if (req !== llmReqId.current) return;
               console.error(err);
               showBubble(
                 String(err).replace(/^.*Error:\s*/i, "").slice(0, 36) || "AI 暂时没回上",
-                2800,
+                4000,
               );
             });
         }
@@ -1096,7 +1128,7 @@ export function PetApp() {
           await api.interact("pat");
         } catch (err) {
           console.error(err);
-          showBubble(String(err).replace(/^.*Error:\s*/i, "") || "互动失败", 2200);
+          showBubble(String(err).replace(/^.*Error:\s*/i, "") || "互动失败", 3600);
         }
         return;
       }
@@ -1217,7 +1249,8 @@ export function PetApp() {
         try {
           if (intent.action === "status") {
             const st = await api.reminderStatus();
-            showBubble(reminderConfirmText(intent, st.summary), 4200);
+            const msg = reminderConfirmText(intent, st.summary);
+            showBubble(msg, bubbleDisplayMs(msg));
             setWaterEnabled(!!st.water?.enabled);
             setStretchEnabled(!!st.stretch?.enabled);
           } else if (intent.action === "cancel") {
@@ -1231,14 +1264,16 @@ export function PetApp() {
               if (intent.kind === "water") setWaterEnabled(false);
               if (intent.kind === "stretch") setStretchEnabled(false);
             }
-            showBubble(reminderConfirmText(intent), 3600);
+            const msg = reminderConfirmText(intent);
+            showBubble(msg, bubbleDisplayMs(msg));
           } else if (intent.kind === "meeting") {
             await api.quickSetReminder({
               kind: "meeting",
               title: intent.title,
               at: intent.at.toISOString(),
             });
-            showBubble(reminderConfirmText(intent), 3600);
+            const msg = reminderConfirmText(intent);
+            showBubble(msg, bubbleDisplayMs(msg));
           } else {
             await api.quickSetReminder({
               kind: intent.kind,
@@ -1246,7 +1281,8 @@ export function PetApp() {
             });
             if (intent.kind === "water") setWaterEnabled(true);
             if (intent.kind === "stretch") setStretchEnabled(true);
-            showBubble(reminderConfirmText(intent), 3600);
+            const msg = reminderConfirmText(intent);
+            showBubble(msg, bubbleDisplayMs(msg));
           }
         } catch (err) {
           showBubble(String(err).replace(/^.*Error:\s*/i, "") || "提醒没设上", 2800);
@@ -1288,10 +1324,11 @@ export function PetApp() {
           await api.quickDisableReminder(args.kind);
           if (args.kind === "water") setWaterEnabled(false);
           else setStretchEnabled(false);
-          showBubble(
-            reminderConfirmText({ action: "cancel", kind: args.kind }),
-            3600,
-          );
+          const cancelMsg = reminderConfirmText({
+            action: "cancel",
+            kind: args.kind,
+          });
+          showBubble(cancelMsg, bubbleDisplayMs(cancelMsg));
           return;
         }
         if (args.kind === "meeting") {
@@ -1303,15 +1340,13 @@ export function PetApp() {
             title: args.title || "会议",
             at: at.toISOString(),
           });
-          showBubble(
-            reminderConfirmText({
-              action: "set",
-              kind: "meeting",
-              title: args.title || "会议",
-              at,
-            }),
-            3600,
-          );
+          const msg = reminderConfirmText({
+            action: "set",
+            kind: "meeting",
+            title: args.title || "会议",
+            at,
+          });
+          showBubble(msg, bubbleDisplayMs(msg));
         } else {
           const intervalMinutes =
             args.intervalMinutes ?? (args.kind === "water" ? 60 : 45);
@@ -1321,14 +1356,12 @@ export function PetApp() {
           });
           if (args.kind === "water") setWaterEnabled(true);
           else setStretchEnabled(true);
-          showBubble(
-            reminderConfirmText({
-              action: "set",
-              kind: args.kind,
-              intervalMinutes,
-            }),
-            3600,
-          );
+          const msg = reminderConfirmText({
+            action: "set",
+            kind: args.kind,
+            intervalMinutes,
+          });
+          showBubble(msg, bubbleDisplayMs(msg));
         }
       } catch (err) {
         showBubble(String(err).replace(/^.*Error:\s*/i, "") || "提醒没设上", 2800);
