@@ -1154,8 +1154,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fluffnest"
-version = "0.2.3"
+.2.4"
 dependencies = [
  "arboard",
  "base64 0.22.1",
