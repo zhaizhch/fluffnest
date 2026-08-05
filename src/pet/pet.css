@@ -471,6 +471,8 @@ html.pet-window #root {
 /* —— Daily fortune card (right of pet) —— */
 .fortune-card {
   width: 260px;
+  max-width: 260px;
+  box-sizing: border-box;
   max-height: 420px;
   flex: 0 0 auto;
   margin: 0 0 20px;
@@ -490,6 +492,116 @@ html.pet-window #root {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
+}
+
+.fortune-card.wechat-card {
+  width: 280px;
+  max-width: 280px;
+}
+
+.wechat-reply-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(90, 70, 50, 0.14);
+  background: rgba(255, 255, 255, 0.75);
+  color: #3d3229;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+  min-height: 64px;
+}
+
+.wechat-incoming {
+  margin-bottom: 6px;
+}
+
+.wechat-incoming-label {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: rgba(61, 50, 41, 0.65);
+}
+
+.wechat-incoming-text {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(90, 70, 50, 0.1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #3d3229;
+  max-height: 88px;
+  overflow: auto;
+}
+
+.wechat-suggests {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.wechat-suggest {
+  text-align: left;
+  border: 1px solid rgba(90, 70, 50, 0.12);
+  border-radius: 10px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.5);
+  color: #3d3229;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.wechat-suggest:hover,
+.wechat-suggest.active {
+  border-color: rgba(45, 140, 90, 0.45);
+  background: rgba(45, 140, 90, 0.1);
+}
+
+.wechat-reply-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.wechat-reply-btn {
+  flex: 1 1 auto;
+  min-height: 30px;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #2d8c5a;
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wechat-reply-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wechat-reply-btn.ghost {
+  background: rgba(90, 70, 50, 0.08);
+  color: #4a3c32;
+}
+
+.wechat-reply-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
 }
 
 .fortune-card-head {
@@ -504,6 +616,19 @@ html.pet-window #root {
   font-size: 11px;
   letter-spacing: 0.06em;
   flex: 0 0 auto;
+}
+
+.fortune-card-head > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fortune-card-head .quick-menu-close {
+  flex: 0 0 auto;
+  flex-shrink: 0;
 }
 
 .fortune-card-body {

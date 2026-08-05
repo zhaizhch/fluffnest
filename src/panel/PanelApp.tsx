@@ -8,7 +8,7 @@ import {
   overallDexProgress,
   unlockSourceLabel,
 } from "../lib/dexProgress";
-import { llmFromSettings, withLlm } from "../lib/llm";
+import { llmFromSettings, wechatFromSettings, withLlm, withWechat } from "../lib/llm";
 import {
   PET_CATEGORIES,
   categoryLabel,
@@ -16,11 +16,27 @@ import {
   type PetCategoryId,
 } from "../lib/petCatalog";
 import { PERSONALITIES, personalityLabel } from "../lib/personality";
-import type { AppState, ChatMessage, ReminderRule } from "../lib/types";
+import type {
+  AppState,
+  ChatMessage,
+  ImDraftResult,
+  ImMessage,
+  ReminderRule,
+  WechatLoginStart,
+  WechatNotifStatus,
+  WechatStatus,
+} from "../lib/types";
 import { PetFigure } from "../pet/PetFigure";
 import "./panel.css";
 
-type Tab = "status" | "chat" | "roster" | "reminders" | "shop" | "settings";
+type Tab =
+  | "status"
+  | "chat"
+  | "roster"
+  | "reminders"
+  | "shop"
+  | "wechat"
+  | "settings";
 
 const COIN_HINT =
   "金币：提醒打卡 +5 · 登录礼 · 亲密度升档礼 · 小铺花币解锁宠物";
@@ -39,17 +55,82 @@ export function PanelApp() {
   const [chatBusy, setChatBusy] = useState(false);
   const [fortuneText, setFortuneText] = useState<string | null>(null);
   const [fortuneBusy, setFortuneBusy] = useState(false);
+  const [imInbox, setImInbox] = useState<ImMessage[]>([]);
+  const [wxStatus, setWxStatus] = useState<WechatStatus | null>(null);
+  const [wxNotif, setWxNotif] = useState<WechatNotifStatus | null>(null);
+  const [wxQr, setWxQr] = useState<WechatLoginStart | null>(null);
+  const [wxBusy, setWxBusy] = useState(false);
+  const [draftTarget, setDraftTarget] = useState<ImDraftResult | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const [draftBusy, setDraftBusy] = useState(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const wxPollRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
     const s = await api.getState();
     setState(s);
     setChatHistory(s.chatHistory ?? []);
+    setImInbox(s.imInbox ?? []);
+  }, []);
+
+  const refreshWechat = useCallback(async () => {
+    try {
+      const [st, nf, inbox] = await Promise.all([
+        api.wechatStatus(),
+        api.wechatNotifStatus(),
+        api.getImInbox(),
+      ]);
+      setWxStatus(st);
+      setWxNotif(nf);
+      setImInbox(inbox);
+    } catch {
+      /* ignore when sidecar cold */
+    }
   }, []);
 
   useEffect(() => {
     refresh().catch(console.error);
-  }, [refresh]);
+    refreshWechat().catch(console.error);
+  }, [refresh, refreshWechat]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(({ listen }) => {
+      void listen("im-inbox-updated", () => {
+        void refreshWechat();
+      }).then((fn) => {
+        unlisten = fn;
+      });
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [refreshWechat]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(({ listen }) => {
+      void listen<string>("open-panel-tab", (e) => {
+        if (e.payload === "wechat") setTab("wechat");
+      }).then((fn) => {
+        unlisten = fn;
+      });
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (tab !== "wechat") return;
+    refreshWechat().catch(console.error);
+  }, [tab, refreshWechat]);
+
+  useEffect(() => {
+    return () => {
+      if (wxPollRef.current) window.clearInterval(wxPollRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -239,6 +320,7 @@ export function PanelApp() {
           {(
             [
               ["status", "状态"],
+              ["wechat", "微信"],
               ["chat", "对话"],
               ["roster", "图鉴"],
               ["reminders", "提醒"],
@@ -248,7 +330,7 @@ export function PanelApp() {
           ).map(([id, label]) => (
             <button
               key={id}
-              className={tab === id ? "active" : ""}
+              className={`${tab === id ? "active" : ""}${id === "wechat" ? " tab-wechat" : ""}`}
               onClick={() => setTab(id)}
             >
               {label}
@@ -310,6 +392,26 @@ export function PanelApp() {
                 color="#b8a0c8"
                 display={`${state.dailyCare?.bondGained ?? 0}/${DAILY_BOND_CAP}`}
               />
+            </div>
+
+            <div className="wechat-entry">
+              <div>
+                <strong>微信联动</strong>
+                <small>
+                  {wxStatus?.loggedIn
+                    ? "ClawBot 已登录"
+                    : wxNotif?.watching
+                      ? "通知感知监听中"
+                      : "未连接 · 普通微信消息需开通知感知"}
+                </small>
+              </div>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => setTab("wechat")}
+              >
+                去连接
+              </button>
             </div>
 
             <h3>性格切换</h3>
@@ -783,6 +885,440 @@ export function PanelApp() {
                 </div>
               );
             })}
+          </section>
+        )}
+
+        {tab === "wechat" && state && (
+          <section className="card wechat-card">
+            <h2>微信联动</h2>
+            <p className="hint">
+              <strong>普通好友来信</strong>请用下面①通知感知；
+              <strong>跟桌宠微信聊天</strong>请用②扫码登录 ClawBot。
+              两者可同时开。消息只存本机。
+            </p>
+
+            {(() => {
+              const wx = wechatFromSettings(state.settings);
+              const patchWx = async (patch: Parameters<typeof withWechat>[1]) => {
+                const next = withWechat(state.settings, patch);
+                const saved = await api.updateSettings(next);
+                setState({ ...state, settings: saved });
+                await refreshWechat();
+              };
+              return (
+                <>
+                  <div className="wechat-step">
+                    <h3>① 收普通微信消息（通知感知）</h3>
+                    <p className="hint">
+                      读取 macOS 微信通知横幅 / Dock 未读角标。请务必：
+                      <br />
+                      1）系统设置 → 隐私与安全性 → 辅助功能 → 勾选
+                      <strong> FluffNest / fluffnest </strong>
+                      （开发版二进制名常为 fluffnest）
+                      <br />
+                      2）微信通知开横幅；测试时让微信<strong>退到后台</strong>（不要前置窗口）
+                    </p>
+                    <div className="wechat-actions">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={async () => {
+                          try {
+                            await api.openAccessibilitySettings();
+                            if (!wxNotif?.trusted) {
+                              toast("请勾选 FluffNest/fluffnest 后回到这里再开一次");
+                            }
+                            await patchWx({ notifEnabled: true });
+                            await refreshWechat();
+                            const st = await api.wechatNotifStatus();
+                            setWxNotif(st);
+                            toast(
+                              st.trusted
+                                ? st.watching
+                                  ? "通知感知已运行，请把微信退到后台再测"
+                                  : "已开启，正在启动监听…"
+                                : "已开启，但辅助功能未授权 — 请勾选后重启绒窝",
+                            );
+                          } catch (err) {
+                            toast(String(err));
+                          }
+                        }}
+                      >
+                        {wx.notifEnabled ? "通知感知已开" : "一键开启通知感知"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await api.openAccessibilitySettings();
+                          } catch (e) {
+                            toast(String(e));
+                          }
+                        }}
+                      >
+                        打开辅助功能
+                      </button>
+                      {wx.notifEnabled && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await patchWx({ notifEnabled: false });
+                              toast("已关闭通知感知");
+                            } catch (e) {
+                              toast(String(e));
+                            }
+                          }}
+                        >
+                          关闭
+                        </button>
+                      )}
+                    </div>
+                    <p className="meta">
+                      辅助功能：{wxNotif?.trusted ? "已授权 ✓" : "未授权 ✗"}
+                      {" · "}
+                      监听：{wxNotif?.watching ? "运行中 ✓" : "未运行"}
+                    </p>
+                  </div>
+
+                  <div className="wechat-step">
+                    <h3>② 扫码登录 ClawBot（跟桌宠聊）</h3>
+                    <p className="hint">
+                      需微信已开通 ClawBot / iLink。登录后，微信私聊走完整 Agent（tools / rules / skills / memory / cycle）：先检索再整理，自动发回。
+                    </p>
+                    <div className="wechat-actions">
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={wxBusy}
+                        onClick={async () => {
+                          setWxBusy(true);
+                          try {
+                            const start = await api.wechatLoginStart();
+                            if (!start.qrImage) {
+                              throw new Error("未返回二维码图片，请重试");
+                            }
+                            setWxQr(start);
+                            await patchWx({ clawbotEnabled: true });
+                            toast("请用微信扫一扫");
+                            if (wxPollRef.current)
+                              window.clearInterval(wxPollRef.current);
+                            wxPollRef.current = window.setInterval(() => {
+                              api
+                                .wechatLoginPoll()
+                                .then((st) => {
+                                  setWxStatus(st);
+                                  if (st.loggedIn) {
+                                    if (wxPollRef.current)
+                                      window.clearInterval(wxPollRef.current);
+                                    wxPollRef.current = null;
+                                    setWxQr(null);
+                                    toast("ClawBot 已登录，微信消息将由大模型自动回复");
+                                    refresh().catch(console.error);
+                                    refreshWechat().catch(console.error);
+                                  }
+                                })
+                                .catch(() => undefined);
+                            }, 2000);
+                          } catch (e) {
+                            toast(
+                              String(e).includes("二维码")
+                                ? `${String(e)}（若暂无 ClawBot，请先用上面的通知感知收普通消息）`
+                                : String(e),
+                            );
+                          } finally {
+                            setWxBusy(false);
+                          }
+                        }}
+                      >
+                        {wxStatus?.loggedIn ? "重新扫码登录" : "显示登录二维码"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            const st = await api.wechatLogout();
+                            setWxStatus(st);
+                            setWxQr(null);
+                            toast("已断开 ClawBot");
+                            await refresh();
+                          } catch (e) {
+                            toast(String(e));
+                          }
+                        }}
+                      >
+                        断开登录
+                      </button>
+                    </div>
+                    {wxQr?.qrImage ? (
+                      <div className="wechat-qr">
+                        <img
+                          src={wxQr.qrImage}
+                          alt="微信登录二维码"
+                          onError={() =>
+                            toast("二维码图片加载失败，请重新点「显示登录二维码」")
+                          }
+                        />
+                        <small>微信扫一扫确认 ClawBot</small>
+                      </div>
+                    ) : (
+                      <p className="meta">
+                        状态：
+                        {wxStatus?.loggedIn
+                          ? `已登录${wxStatus.polling ? " · 轮询收信中" : ""}`
+                          : "未登录 · 点上方按钮显示二维码"}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="wechat-step">
+                    <h3>选项</h3>
+                    <div className="toggles">
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={wx.autoReplyFromWechat}
+                          onChange={async (e) => {
+                            try {
+                              await patchWx({
+                                autoReplyFromWechat: e.target.checked,
+                              });
+                            } catch (err) {
+                              toast(String(err));
+                            }
+                          }}
+                        />
+                        微信消息经 Agent 自动回复（仅 ClawBot）
+                      </label>
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={wx.ttsOnIncoming}
+                          onChange={async (e) => {
+                            try {
+                              await patchWx({ ttsOnIncoming: e.target.checked });
+                            } catch (err) {
+                              toast(String(err));
+                            }
+                          }}
+                        />
+                        来信朗读
+                      </label>
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={wx.urgentBreaksFocus}
+                          onChange={async (e) => {
+                            try {
+                              await patchWx({
+                                urgentBreaksFocus: e.target.checked,
+                              });
+                            } catch (err) {
+                              toast(String(err));
+                            }
+                          }}
+                        />
+                        紧急消息可打断专注
+                      </label>
+                    </div>
+                    <label className="field">
+                      未读催促（分钟，0=关）
+                      <input
+                        type="number"
+                        min={0}
+                        max={240}
+                        value={wx.nudgeMinutes}
+                        onChange={async (e) => {
+                          const n = Number(e.target.value) || 0;
+                          try {
+                            await patchWx({ nudgeMinutes: n });
+                          } catch (err) {
+                            toast(String(err));
+                          }
+                        }}
+                      />
+                    </label>
+                    <div className="wechat-actions">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await api.simulateImMessage(
+                              "测试好友",
+                              "嗨，这是一条测试微信～",
+                            );
+                            await refresh();
+                            await refreshWechat();
+                            toast("已模拟来信，看看桌宠有没有反应");
+                          } catch (e) {
+                            toast(String(e));
+                          }
+                        }}
+                      >
+                        模拟来信（测桌宠）
+                      </button>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+
+            {draftTarget && (
+              <div className="im-draft">
+                <h3>来信 · 回复建议</h3>
+                <p className="im-draft-incoming-label">
+                  {draftTarget.sender || "对方"} 说
+                </p>
+                <pre className="im-draft-incoming">
+                  {draftTarget.incoming || "（未读到正文）"}
+                </pre>
+                {draftTarget.summary &&
+                draftTarget.summary !== draftTarget.incoming ? (
+                  <p className="hint">概括：{draftTarget.summary}</p>
+                ) : null}
+                {draftTarget.suggestions?.length > 0 && (
+                  <div className="im-suggests">
+                    {draftTarget.suggestions.map((s, i) => (
+                      <button
+                        key={`${i}-${s.slice(0, 12)}`}
+                        type="button"
+                        className={draftText === s ? "active" : ""}
+                        onClick={() => setDraftText(s)}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <textarea
+                  rows={3}
+                  value={draftText}
+                  onChange={(e) => setDraftText(e.target.value)}
+                  placeholder="写回复或点选上方建议…"
+                />
+                <div className="wechat-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={async () => {
+                      try {
+                        const result = await api.sendImReply(
+                          draftTarget.messageId,
+                          draftText,
+                        );
+                        toast(
+                          result === "sent"
+                            ? "已发送"
+                            : result === "pasted"
+                              ? "已打开微信并粘贴，回车发送即可"
+                              : "已复制并打开微信，输入框 Cmd+V 后回车",
+                        );
+                        setDraftTarget(null);
+                        await refreshWechat();
+                      } catch (e) {
+                        toast(String(e));
+                      }
+                    }}
+                  >
+                    {draftTarget.canSend ? "确认发送" : "复制并打开微信"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={draftBusy}
+                    onClick={async () => {
+                      try {
+                        setDraftBusy(true);
+                        const d = await api.draftImReply(
+                          draftTarget.messageId,
+                          true,
+                        );
+                        setDraftTarget(d);
+                        setDraftText(d.draft);
+                        toast("已换一批建议");
+                      } catch (e) {
+                        toast(String(e));
+                      } finally {
+                        setDraftBusy(false);
+                      }
+                    }}
+                  >
+                    {draftBusy ? "生成中…" : "重新建议"}
+                  </button>
+                  <button type="button" onClick={() => setDraftTarget(null)}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <h3>
+              最近消息
+              {imInbox.some((m) => !m.acknowledged) ? (
+                <button
+                  type="button"
+                  className="im-ack-all"
+                  onClick={async () => {
+                    try {
+                      const n = await api.acknowledgeAllImMessages();
+                      toast(n > 0 ? `已清除 ${n} 条未读` : "没有未读");
+                      await refreshWechat();
+                    } catch (e) {
+                      toast(String(e));
+                    }
+                  }}
+                >
+                  全部已读
+                </button>
+              ) : null}
+            </h3>
+            <ul className="im-inbox">
+              {[...imInbox].reverse().slice(0, 20).map((m) => (
+                <li key={m.id} className={m.acknowledged ? "acked" : ""}>
+                  <div>
+                    <strong>
+                      {m.sender}
+                      {m.urgency === "urgent" ? " · 紧急" : ""}
+                      {m.source === "notif"
+                        ? " · 通知"
+                        : m.source === "simulate"
+                          ? " · 模拟"
+                          : " · ClawBot"}
+                    </strong>
+                    <p>{m.summary || m.text}</p>
+                  </div>
+                  <div className="im-actions">
+                    {!m.acknowledged && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await api.acknowledgeImMessage(m.id);
+                          await refreshWechat();
+                        }}
+                      >
+                        已读
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const d = await api.draftImReply(m.id);
+                          setDraftTarget(d);
+                          setDraftText(d.draft);
+                        } catch (e) {
+                          toast(String(e));
+                        }
+                      }}
+                    >
+                      帮我回
+                    </button>
+                  </div>
+                </li>
+              ))}
+              {imInbox.length === 0 && (
+                <li className="empty">暂无来信 · 先点「模拟来信」或开启通知感知</li>
+              )}
+            </ul>
           </section>
         )}
 

@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fluffnest/deskpet/backend/internal/agent"
 	"github.com/fluffnest/deskpet/backend/internal/cache"
 	"github.com/fluffnest/deskpet/backend/internal/geo"
 	"github.com/fluffnest/deskpet/backend/internal/llm"
 	"github.com/fluffnest/deskpet/backend/internal/news"
+	"github.com/fluffnest/deskpet/backend/internal/search"
 	"github.com/fluffnest/deskpet/backend/internal/types"
 	"github.com/fluffnest/deskpet/backend/internal/weather"
 )
@@ -22,17 +24,34 @@ type Server struct {
 	weather *weather.Service
 	news    *news.Service
 	geo     *geo.Service
+	search  *search.Service
+	agent   *agent.Runtime
 	mux     *http.ServeMux
 }
 
 func New() *Server {
 	c := cache.New()
 	ai := llm.NewClient()
+	searchSvc := search.New(ai.HTTP(), c)
+	weatherSvc := weather.New(ai.HTTP(), c)
+	newsSvc := news.New(ai.HTTP(), c)
+	geoSvc := geo.New(ai.HTTP(), c)
+	rt, err := agent.NewRuntimeWithDeps(ai, agent.ToolDeps{
+		Search:  searchSvc,
+		Weather: weatherSvc,
+		News:    newsSvc,
+		Geo:     geoSvc,
+	})
+	if err != nil {
+		log.Printf("agent runtime init failed: %v", err)
+	}
 	s := &Server{
 		llm:     ai,
-		weather: weather.New(ai.HTTP(), c),
-		news:    news.New(ai.HTTP(), c),
-		geo:     geo.New(ai.HTTP(), c),
+		weather: weatherSvc,
+		news:    newsSvc,
+		geo:     geoSvc,
+		search:  searchSvc,
+		agent:   rt,
 		mux:     http.NewServeMux(),
 	}
 	s.routes()
@@ -57,6 +76,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/weather-tip", s.handleWeatherTip)
 	s.mux.HandleFunc("POST /v1/news", s.handleNews)
 	s.mux.HandleFunc("POST /v1/news-tip", s.handleNewsTip)
+	s.mux.HandleFunc("POST /v1/im-triage", s.handleImTriage)
+	s.mux.HandleFunc("POST /v1/im-draft", s.handleImDraft)
+	s.mux.HandleFunc("POST /v1/im-suggest", s.handleImSuggest)
+	s.mux.HandleFunc("POST /v1/im-agent-reply", s.handleImAgentReply)
 }
 
 func (s *Server) Serve(ln net.Listener) error {
@@ -70,7 +93,11 @@ func (s *Server) Serve(ln net.Listener) error {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "fluffnest-ai"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"service": "fluffnest-ai",
+		"agent":   s.agent != nil,
+	})
 }
 
 func (s *Server) handleBubble(w http.ResponseWriter, r *http.Request) {
@@ -221,6 +248,88 @@ func (s *Server) handleNewsTip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, types.TextResponse{Text: tip})
+}
+
+func (s *Server) handleImTriage(w http.ResponseWriter, r *http.Request) {
+	var req types.ImMessageRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.llm.GenerateImTriage(r.Context(), req.LLM, req.Pet, req.Sender, req.Text)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleImDraft(w http.ResponseWriter, r *http.Request) {
+	var req types.ImMessageRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	text, err := s.llm.GenerateImDraft(r.Context(), req.LLM, req.Pet, req.Sender, req.Text)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, types.TextResponse{Text: text})
+}
+
+func (s *Server) handleImSuggest(w http.ResponseWriter, r *http.Request) {
+	var req types.ImMessageRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.llm.GenerateImSuggest(r.Context(), req.LLM, req.Pet, req.Sender, req.Text, req.Refresh)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleImAgentReply(w http.ResponseWriter, r *http.Request) {
+	var req types.ImAgentReplyRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.agent == nil {
+		writeErr(w, http.StatusServiceUnavailable, "agent runtime 未就绪")
+		return
+	}
+	city := req.City
+	if city == "" {
+		city = req.LLM.City
+	}
+	channel := req.Channel
+	if channel == "" {
+		channel = "wechat"
+	}
+	out, err := s.agent.Run(r.Context(), agent.Request{
+		LLM:     req.LLM,
+		Pet:     req.Pet,
+		History: req.History,
+		Message: req.Message,
+		City:    city,
+		PeerID:  req.PeerID,
+		Channel: channel,
+	})
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, types.ImAgentReplyResponse{
+		Text:       out.Text,
+		Cycles:     out.Cycles,
+		ToolsUsed:  out.ToolsUsed,
+		SkillsUsed: out.SkillsUsed,
+		Trace:      out.Trace,
+	})
 }
 
 func decode(r *http.Request, dst any) error {

@@ -2,11 +2,16 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppState,
   ChatMessage,
+  ImDraftResult,
+  ImMessage,
   PetInstance,
   PetSaysPayload,
   ReminderRule,
   Settings,
   Wallet,
+  WechatLoginStart,
+  WechatNotifStatus,
+  WechatStatus,
 } from "./types";
 
 export type InteractAction =
@@ -81,4 +86,27 @@ export const api = {
   testLlm: () => invoke<string>("test_llm"),
   triggerProactive: (kind: "weather" | "joke" | "news" | "fortune" | string) =>
     invoke<PetSaysPayload>("trigger_proactive", { kind }),
+  simulateImMessage: (sender?: string, text?: string) =>
+    invoke<ImMessage | null>("simulate_im_message", {
+      sender: sender ?? null,
+      text: text ?? null,
+    }),
+  getImInbox: () => invoke<ImMessage[]>("get_im_inbox"),
+  acknowledgeImMessage: (messageId: string) =>
+    invoke<void>("acknowledge_im_message", { messageId }),
+  acknowledgeAllImMessages: () => invoke<number>("acknowledge_all_im_messages"),
+  pruneImNoise: () => invoke<number>("prune_im_noise"),
+  draftImReply: (messageId: string, refresh?: boolean) =>
+    invoke<ImDraftResult>("draft_im_reply", { messageId, refresh: !!refresh }),
+  sendImReply: (messageId: string, text: string) =>
+    invoke<string>("send_im_reply", { messageId, text }),
+  wechatLoginStart: () => invoke<WechatLoginStart>("wechat_login_start"),
+  wechatLoginPoll: () => invoke<WechatStatus>("wechat_login_poll"),
+  wechatLogout: () => invoke<WechatStatus>("wechat_logout"),
+  wechatStatus: () => invoke<WechatStatus>("wechat_status"),
+  wechatNotifStatus: () => invoke<WechatNotifStatus>("wechat_notif_status"),
+  openAccessibilitySettings: () => invoke<void>("open_accessibility_settings"),
+  openWechatApp: () => invoke<void>("open_wechat_app"),
+  copyTextClipboard: (text: string) =>
+    invoke<void>("copy_text_clipboard", { text }),
 };

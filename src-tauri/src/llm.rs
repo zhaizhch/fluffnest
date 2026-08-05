@@ -27,6 +27,12 @@ pub struct PetSaysPayload {
     /// Optional structured detail (e.g. weather number card).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// IM message id when kind is wechat — avoids racing latestImId on the UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    /// True when ClawBot will auto-send a pet reply (UI should not also draft).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_replying: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +83,44 @@ pub fn generate_chat_reply(
         "message": user_message,
     });
     let resp: TextResponse = go_bridge::post_json("/v1/chat", &body)?;
+    Ok(resp.text)
+}
+
+/// WeChat ClawBot auto-reply via full agent (tools/rules/skills/memory/cycle).
+pub fn generate_wechat_agent_reply(
+    llm: &LlmSettings,
+    pet: &PetInstance,
+    history: &[ChatMessage],
+    user_message: &str,
+    peer_user_id: Option<&str>,
+) -> Result<String, String> {
+    let body = json!({
+        "llm": llm,
+        "pet": pet,
+        "history": history,
+        "message": user_message,
+        "city": llm.weather_city,
+        "peerId": peer_user_id.unwrap_or(""),
+        "channel": "wechat",
+    });
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AgentResp {
+        text: String,
+        #[serde(default)]
+        cycles: i32,
+        #[serde(default)]
+        tools_used: Vec<String>,
+        #[serde(default)]
+        skills_used: Vec<String>,
+    }
+    let resp: AgentResp = go_bridge::post_json("/v1/im-agent-reply", &body)?;
+    if resp.cycles > 0 || !resp.tools_used.is_empty() || !resp.skills_used.is_empty() {
+        eprintln!(
+            "[llm] wechat agent cycles={} tools={:?} skills={:?}",
+            resp.cycles, resp.tools_used, resp.skills_used
+        );
+    }
     Ok(resp.text)
 }
 
@@ -189,6 +233,89 @@ pub fn proactive_kind_behavior(kind: &str) -> &'static str {
         "news" => "wave",
         "fortune" => "magic",
         "reminder" => "react",
+        "wechat" => "phone",
         _ => "wave",
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImTriageResult {
+    #[serde(default)]
+    pub urgency: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub react: String,
+    #[serde(default)]
+    pub reminder: Option<ImReminderHint>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImReminderHint {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub at: Option<String>,
+    #[serde(default)]
+    pub interval_minutes: Option<i32>,
+}
+
+pub fn im_triage(
+    llm: &LlmSettings,
+    pet: &PetInstance,
+    sender: &str,
+    text: &str,
+) -> Result<ImTriageResult, String> {
+    let body = json!({
+        "llm": llm,
+        "pet": pet,
+        "sender": sender,
+        "text": text,
+    });
+    go_bridge::post_json("/v1/im-triage", &body)
+}
+
+pub fn im_draft(
+    llm: &LlmSettings,
+    pet: &PetInstance,
+    sender: &str,
+    text: &str,
+) -> Result<String, String> {
+    let sug = im_suggest(llm, pet, sender, text, false)?;
+    if !sug.draft.is_empty() {
+        return Ok(sug.draft);
+    }
+    sug.suggestions
+        .into_iter()
+        .next()
+        .ok_or_else(|| "empty draft".into())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImSuggestResponse {
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub suggestions: Vec<String>,
+    #[serde(default)]
+    pub draft: String,
+}
+
+pub fn im_suggest(
+    llm: &LlmSettings,
+    pet: &PetInstance,
+    sender: &str,
+    text: &str,
+    refresh: bool,
+) -> Result<ImSuggestResponse, String> {
+    let body = json!({
+        "llm": llm,
+        "pet": pet,
+        "sender": sender,
+        "text": text,
+        "refresh": refresh,
+    });
+    go_bridge::post_json("/v1/im-suggest", &body)
 }

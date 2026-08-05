@@ -100,6 +100,51 @@ type LinesResponse struct {
 	Lines []string `json:"lines"`
 }
 
+type ImAgentReplyRequest struct {
+	LLM     LlmSettings   `json:"llm"`
+	Pet     PetInstance   `json:"pet"`
+	History []ChatMessage `json:"history"`
+	Message string        `json:"message"`
+	City    string        `json:"city,omitempty"`
+	PeerID  string        `json:"peerId,omitempty"`
+	Channel string        `json:"channel,omitempty"`
+}
+
+type ImAgentReplyResponse struct {
+	Text       string   `json:"text"`
+	Cycles     int      `json:"cycles,omitempty"`
+	ToolsUsed  []string `json:"toolsUsed,omitempty"`
+	SkillsUsed []string `json:"skillsUsed,omitempty"`
+	Trace      []string `json:"trace,omitempty"`
+}
+
+type ImMessageRequest struct {
+	LLM     LlmSettings `json:"llm"`
+	Pet     PetInstance `json:"pet"`
+	Sender  string      `json:"sender"`
+	Text    string      `json:"text"`
+	Refresh bool        `json:"refresh"`
+}
+
+type ImReminderHint struct {
+	Title           string  `json:"title"`
+	At              *string `json:"at,omitempty"`
+	IntervalMinutes *int    `json:"intervalMinutes,omitempty"`
+}
+
+type ImTriageResponse struct {
+	Urgency  string          `json:"urgency"`
+	Summary  string          `json:"summary"`
+	React    string          `json:"react"`
+	Reminder *ImReminderHint `json:"reminder,omitempty"`
+}
+
+type ImSuggestResponse struct {
+	Summary     string   `json:"summary"`
+	Suggestions []string `json:"suggestions"`
+	Draft       string   `json:"draft"`
+}
+
 type ErrorResponse struct {
 	Error string `json:"error"`
 }

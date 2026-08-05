@@ -109,6 +109,11 @@ func (c *Client) GenerateBubble(ctx context.Context, llm types.LlmSettings, pet 
 		task = fmt.Sprintf("下面是刚查到的科技/娱乐实时新闻（可能有多条）。请挑一条，用「%s」性格缩成一句轻松吐槽（不超过 32 字，不要吓人、不要政治，不要罗列多条）：\n%s\n只输出这一句。", pet.Personality, extraVal)
 	case "fortune_teaser":
 		task = fmt.Sprintf("你刚给主人讲完今日运势。用「%s」性格再补一句很短的鼓励或俏皮收尾（不超过 28 字）。只输出这一句。", pet.Personality)
+	case "im_react":
+		task = fmt.Sprintf(
+			"主人刚收到一条微信消息。发送者与内容如下：\n%s\n请用「%s」性格说一句很短的反应（不超过 30 字），可提醒主人留意，不要复述全文。只输出这一句。",
+			extraVal, pet.Personality,
+		)
 	default:
 		task = fmt.Sprintf("用「%s」性格说一句很短的话（不超过 28 字），情境：%s。只输出这一句。", pet.Personality, action)
 	}
@@ -341,7 +346,141 @@ func ProactiveBehavior(kind string) string {
 		return "magic"
 	case "reminder":
 		return "react"
+	case "wechat":
+		return "phone"
 	default:
 		return "wave"
 	}
+}
+
+func (c *Client) GenerateImTriage(ctx context.Context, llm types.LlmSettings, pet types.PetInstance, sender, text string) (types.ImTriageResponse, error) {
+	var empty types.ImTriageResponse
+	if err := EnsureConfigured(llm); err != nil {
+		return empty, err
+	}
+	user := fmt.Sprintf(
+		"主人收到微信消息。发送者：%s\n内容：%s\n\n请输出一个 JSON 对象（不要其它文字），字段：\n"+
+			`- "urgency": "urgent"|"normal"|"noise"（广告/群刷屏/无意义→noise；开会/截止/紧急求助→urgent；其余 normal）`+"\n"+
+			`- "summary": 不超过 40 字的摘要`+"\n"+
+			`- "react": 用「%s」性格说一句桌宠反应（不超过 30 字）`+"\n"+
+			`- "reminder": 可选；若内容含明确时间待办/会议，给 {"title":"...","at":"RFC3339 或省略","intervalMinutes":数字或省略}，否则省略该字段`+"\n"+
+			"（直接输出 JSON，不要思考过程）",
+		sender, text, pet.Personality,
+	)
+	raw, err := c.ChatCompletion(ctx, llm, []map[string]string{
+		msg("system", SystemPrompt(pet)),
+		msg("user", user),
+	}, ChatOpts())
+	if err != nil {
+		return empty, err
+	}
+	trimmed := strings.TrimSpace(raw)
+	if a, b := strings.IndexByte(trimmed, '{'), strings.LastIndexByte(trimmed, '}'); a >= 0 && b > a {
+		trimmed = trimmed[a : b+1]
+	}
+	var out types.ImTriageResponse
+	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
+		return types.ImTriageResponse{
+			Urgency: "normal",
+			Summary: CleanLine(text, 40),
+			React:   CleanLine(raw, MaxBubbleChars),
+		}, nil
+	}
+	out.Urgency = strings.ToLower(strings.TrimSpace(out.Urgency))
+	if out.Urgency != "urgent" && out.Urgency != "noise" {
+		out.Urgency = "normal"
+	}
+	out.Summary = CleanLine(out.Summary, 48)
+	out.React = CleanLine(out.React, MaxBubbleChars)
+	if out.Summary == "" {
+		out.Summary = CleanLine(text, 40)
+	}
+	if out.React == "" {
+		out.React = CleanLine(fmt.Sprintf("微信来信：%s", sender), MaxBubbleChars)
+	}
+	return out, nil
+}
+
+func (c *Client) GenerateImDraft(ctx context.Context, llm types.LlmSettings, pet types.PetInstance, sender, text string) (string, error) {
+	sug, err := c.GenerateImSuggest(ctx, llm, pet, sender, text, false)
+	if err != nil {
+		return "", err
+	}
+	if sug.Draft != "" {
+		return sug.Draft, nil
+	}
+	if len(sug.Suggestions) > 0 {
+		return sug.Suggestions[0], nil
+	}
+	return "", fmt.Errorf("未生成回复建议")
+}
+
+func (c *Client) GenerateImSuggest(ctx context.Context, llm types.LlmSettings, pet types.PetInstance, sender, text string, refresh bool) (types.ImSuggestResponse, error) {
+	var empty types.ImSuggestResponse
+	if err := EnsureConfigured(llm); err != nil {
+		return empty, err
+	}
+	refreshHint := ""
+	opts := ChatOpts()
+	if refresh {
+		refreshHint = "\n重要：这是「重新建议」。请换一批全新措辞与角度，不要重复常见套话，三条建议彼此差异要明显。"
+		opts.Temperature = 0.95
+		opts.MaxTokens = 180
+	}
+	user := fmt.Sprintf(
+		"主人收到微信消息，需要回复建议。\n发送者：%s\n对方原文：%s\n\n请输出 JSON（不要其它文字）：\n"+
+			`{"summary":"用一句话概括对方在说什么（≤40字）","suggestions":["建议1","建议2","建议3"],"draft":"默认推荐回复"}`+"\n"+
+			"要求：\n"+
+			"1. suggestions 给 3 条语气不同的可选回复（礼貌得体 / 轻松简短 / 带一点「%s」性格），每条不超过 50 字。\n"+
+			"2. draft 选最稳妥、最像主人本人会发的那条。\n"+
+			"3. 像真人微信聊天，不要列表、不要称呼「主人」、不要暴露桌宠设定。\n"+
+			"（直接输出 JSON，不要思考过程）%s",
+		sender, text, pet.Personality, refreshHint,
+	)
+	raw, err := c.ChatCompletion(ctx, llm, []map[string]string{
+		msg("system", SystemPrompt(pet)),
+		msg("user", user),
+	}, opts)
+	if err != nil {
+		return empty, err
+	}
+	trimmed := strings.TrimSpace(raw)
+	if a, b := strings.IndexByte(trimmed, '{'), strings.LastIndexByte(trimmed, '}'); a >= 0 && b > a {
+		trimmed = trimmed[a : b+1]
+	}
+	var out types.ImSuggestResponse
+	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
+		line := CleanLine(raw, MaxChatChars)
+		return types.ImSuggestResponse{
+			Summary:     CleanLine(text, 40),
+			Suggestions: []string{line},
+			Draft:       line,
+		}, nil
+	}
+	out.Summary = CleanLine(out.Summary, 48)
+	if out.Summary == "" {
+		out.Summary = CleanLine(text, 40)
+	}
+	cleaned := make([]string, 0, 3)
+	for _, s := range out.Suggestions {
+		if line := CleanLine(s, MaxChatChars); line != "" {
+			cleaned = append(cleaned, line)
+		}
+		if len(cleaned) >= 3 {
+			break
+		}
+	}
+	out.Suggestions = cleaned
+	out.Draft = CleanLine(out.Draft, MaxChatChars)
+	if out.Draft == "" && len(out.Suggestions) > 0 {
+		out.Draft = out.Suggestions[0]
+	}
+	if out.Draft == "" {
+		out.Draft = "收到，我稍后回复你～"
+		out.Suggestions = []string{out.Draft}
+	}
+	if len(out.Suggestions) == 0 {
+		out.Suggestions = []string{out.Draft}
+	}
+	return out, nil
 }

@@ -1,5 +1,5 @@
-import type { LlmSettings, Settings } from "./types";
-import { DEFAULT_LLM_SETTINGS } from "./types";
+import type { LlmSettings, Settings, WechatSettings } from "./types";
+import { DEFAULT_LLM_SETTINGS, DEFAULT_WECHAT_SETTINGS } from "./types";
 
 export function llmFromSettings(settings: Settings | null | undefined): LlmSettings {
   return { ...DEFAULT_LLM_SETTINGS, ...(settings?.llm ?? {}) };
@@ -12,6 +12,22 @@ export function withLlm(
   return {
     ...settings,
     llm: { ...llmFromSettings(settings), ...patch },
+  };
+}
+
+export function wechatFromSettings(
+  settings: Settings | null | undefined,
+): WechatSettings {
+  return { ...DEFAULT_WECHAT_SETTINGS, ...(settings?.wechat ?? {}) };
+}
+
+export function withWechat(
+  settings: Settings,
+  patch: Partial<WechatSettings>,
+): Settings {
+  return {
+    ...settings,
+    wechat: { ...wechatFromSettings(settings), ...patch },
   };
 }
 

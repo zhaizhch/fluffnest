@@ -1,0 +1,223 @@
+package agent
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Memory is durable agent knowledge scoped by peer (WeChat user) + global.
+type Memory struct {
+	mu       sync.Mutex
+	path     string
+	Global   map[string]MemoryItem            `json:"global"`
+	Peers    map[string]map[string]MemoryItem `json:"peers"`
+	Sessions map[string]SessionMemory         `json:"sessions"`
+}
+
+type MemoryItem struct {
+	Value     string `json:"value"`
+	UpdatedAt string `json:"updatedAt"`
+	Source    string `json:"source,omitempty"`
+}
+
+type SessionMemory struct {
+	Notes     []string `json:"notes"`
+	UpdatedAt string   `json:"updatedAt"`
+}
+
+func DefaultMemoryPath() string {
+	if p := strings.TrimSpace(os.Getenv("FLUFFNEST_AGENT_MEMORY")); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "fluffnest-agent-memory.json"
+	}
+	return filepath.Join(home, ".fluffnest", "agent-memory.json")
+}
+
+func OpenMemory(path string) (*Memory, error) {
+	if path == "" {
+		path = DefaultMemoryPath()
+	}
+	m := &Memory{
+		path:     path,
+		Global:   map[string]MemoryItem{},
+		Peers:    map[string]map[string]MemoryItem{},
+		Sessions: map[string]SessionMemory{},
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return m, nil
+		}
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return m, nil
+	}
+	if err := json.Unmarshal(raw, m); err != nil {
+		return nil, err
+	}
+	if m.Global == nil {
+		m.Global = map[string]MemoryItem{}
+	}
+	if m.Peers == nil {
+		m.Peers = map[string]map[string]MemoryItem{}
+	}
+	if m.Sessions == nil {
+		m.Sessions = map[string]SessionMemory{}
+	}
+	m.path = path
+	return m, nil
+}
+
+func (m *Memory) saveLocked() error {
+	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := m.path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, m.path)
+}
+
+func (m *Memory) Snapshot(peerID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var b strings.Builder
+	b.WriteString("### Global memory\n")
+	if len(m.Global) == 0 {
+		b.WriteString("(empty)\n")
+	} else {
+		for k, v := range m.Global {
+			fmt.Fprintf(&b, "- %s = %s\n", k, v.Value)
+		}
+	}
+	peerID = strings.TrimSpace(peerID)
+	if peerID != "" {
+		b.WriteString("\n### Peer memory\n")
+		if pm := m.Peers[peerID]; len(pm) == 0 {
+			b.WriteString("(empty)\n")
+		} else {
+			for k, v := range pm {
+				fmt.Fprintf(&b, "- %s = %s\n", k, v.Value)
+			}
+		}
+		if sess, ok := m.Sessions[peerID]; ok && len(sess.Notes) > 0 {
+			b.WriteString("\n### Session notes\n")
+			for _, n := range sess.Notes {
+				fmt.Fprintf(&b, "- %s\n", n)
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func (m *Memory) Read(peerID, key string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", false
+	}
+	if peerID != "" {
+		if pm := m.Peers[peerID]; pm != nil {
+			if it, ok := pm[key]; ok {
+				return it.Value, true
+			}
+		}
+	}
+	if it, ok := m.Global[key]; ok {
+		return it.Value, true
+	}
+	return "", false
+}
+
+func (m *Memory) Write(peerID, key, value, source string, global bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return fmt.Errorf("key/value 不能为空")
+	}
+	if looksSecret(key, value) {
+		return fmt.Errorf("拒绝存储疑似敏感信息")
+	}
+	item := MemoryItem{
+		Value:     truncateRunes(value, 240),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		Source:    source,
+	}
+	if global || peerID == "" {
+		m.Global[key] = item
+	} else {
+		if m.Peers[peerID] == nil {
+			m.Peers[peerID] = map[string]MemoryItem{}
+		}
+		m.Peers[peerID][key] = item
+	}
+	return m.saveLocked()
+}
+
+func (m *Memory) Delete(peerID, key string, global bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("key 不能为空")
+	}
+	if global || peerID == "" {
+		delete(m.Global, key)
+	} else if pm := m.Peers[peerID]; pm != nil {
+		delete(pm, key)
+	}
+	return m.saveLocked()
+}
+
+func (m *Memory) AddSessionNote(peerID, note string) error {
+	peerID = strings.TrimSpace(peerID)
+	note = strings.TrimSpace(note)
+	if peerID == "" || note == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sess := m.Sessions[peerID]
+	sess.Notes = append(sess.Notes, truncateRunes(note, 160))
+	if len(sess.Notes) > 12 {
+		sess.Notes = sess.Notes[len(sess.Notes)-12:]
+	}
+	sess.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	m.Sessions[peerID] = sess
+	return m.saveLocked()
+}
+
+func looksSecret(key, value string) bool {
+	k := strings.ToLower(key + " " + value)
+	for _, s := range []string{"password", "passwd", "api_key", "apikey", "token", "secret", "bot_token", "私钥", "密码"} {
+		if strings.Contains(k, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}

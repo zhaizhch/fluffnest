@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export type QuickAction = "joke" | "news" | "weather" | "fortune" | "chat";
+export type QuickAction = "joke" | "news" | "weather" | "fortune" | "chat" | "wechat";
 
 export type QuickRemindKind = "water" | "stretch" | "meeting";
 
@@ -8,9 +8,11 @@ type Props = {
   open: boolean;
   busy: boolean;
   petName: string;
+  imUnread?: number;
   onClose: () => void;
-  onAction: (action: Exclude<QuickAction, "chat">) => void;
+  onAction: (action: Exclude<QuickAction, "chat" | "wechat">) => void;
   onChat: (text: string) => Promise<void> | void;
+  onWechat?: () => Promise<void> | void;
   onRemind: (args: {
     kind: QuickRemindKind;
     title?: string;
@@ -20,7 +22,7 @@ type Props = {
 };
 
 const ACTIONS: {
-  id: Exclude<QuickAction, "chat">;
+  id: Exclude<QuickAction, "chat" | "wechat">;
   label: string;
   hint: string;
 }[] = [
@@ -41,9 +43,11 @@ export function QuickMenu({
   open,
   busy,
   petName,
+  imUnread = 0,
   onClose,
   onAction,
   onChat,
+  onWechat,
   onRemind,
 }: Props) {
   const [draft, setDraft] = useState("");
@@ -134,6 +138,21 @@ export function QuickMenu({
                 <small>{a.hint}</small>
               </button>
             ))}
+            {onWechat && (
+              <button
+                type="button"
+                className="quick-menu-item"
+                disabled={locked || imUnread <= 0}
+                onClick={() => {
+                  void onWechat();
+                }}
+              >
+                <strong>最近微信{imUnread > 0 ? ` (${imUnread})` : ""}</strong>
+                <small>
+                  {imUnread > 0 ? "帮我回 / 查看来信" : "暂无未读"}
+                </small>
+              </button>
+            )}
             <button
               type="button"
               className="quick-menu-item"
@@ -217,26 +236,25 @@ export function QuickMenu({
             <button
               type="button"
               className="quick-menu-send block"
-              disabled={locked || !meetingAt}
+              disabled={locked || !meetingTitle.trim() || !meetingAt}
               onClick={() =>
                 void runRemind("meeting", {
-                  title: meetingTitle.trim() || "会议",
+                  title: meetingTitle.trim(),
                   atLocal: meetingAt,
                 })
               }
             >
               添加会议提醒
             </button>
+            <button
+              type="button"
+              className="quick-menu-send block"
+              disabled={locked}
+              onClick={() => setView("main")}
+            >
+              返回
+            </button>
           </div>
-
-          <button
-            type="button"
-            className="quick-back"
-            disabled={locked}
-            onClick={() => setView("main")}
-          >
-            返回
-          </button>
         </div>
       )}
     </div>

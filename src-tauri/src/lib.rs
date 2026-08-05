@@ -1,15 +1,18 @@
 mod commands;
 mod go_bridge;
+mod im;
 mod llm;
 mod state;
 mod tts;
+mod wechat_ilink;
+mod wechat_notif;
 
 use commands::SharedState;
 use state::load_state;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, RunEvent, WindowEvent,
+    Emitter, Manager, RunEvent, WindowEvent,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -21,6 +24,8 @@ pub fn run() {
         .setup(|app| {
             let initial = load_state(&app.handle());
             app.manage(SharedState(std::sync::Mutex::new(initial)));
+            // Clear historical Dock-badge / window-title spam from the IM inbox.
+            let _ = crate::im::prune_noise_inbox(&app.handle());
 
             // Edge TTS / rustls needs a process-level crypto provider.
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -44,8 +49,9 @@ pub fn run() {
             let show_pet = MenuItem::with_id(app, "show_pet", "显示宠物", true, None::<&str>)?;
             let hide_pet = MenuItem::with_id(app, "hide_pet", "隐藏宠物", true, None::<&str>)?;
             let open_panel = MenuItem::with_id(app, "open_panel", "打开绒窝面板", true, None::<&str>)?;
+            let open_wechat = MenuItem::with_id(app, "open_wechat_tab", "微信联动…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出绒窝", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_pet, &hide_pet, &open_panel, &quit])?;
+            let menu = Menu::with_items(app, &[&show_pet, &hide_pet, &open_panel, &open_wechat, &quit])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -62,10 +68,13 @@ pub fn run() {
                             let _ = w.hide();
                         }
                     }
-                    "open_panel" => {
+                    "open_panel" | "open_wechat_tab" => {
                         if let Some(w) = app.get_webview_window("panel") {
                             let _ = w.show();
                             let _ = w.set_focus();
+                        }
+                        if event.id.as_ref() == "open_wechat_tab" {
+                            let _ = app.emit("open-panel-tab", "wechat");
                         }
                     }
                     "quit" => {
@@ -103,6 +112,20 @@ pub fn run() {
                 check_proactive(&handle2);
             });
 
+            // IM nudge poller (every 60s)
+            let handle3 = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                crate::im::check_im_nudges(&handle3);
+            });
+
+            // Resume WeChat bridges if previously enabled.
+            let handle4 = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                crate::im::sync_bridges(&handle4);
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -138,11 +161,28 @@ pub fn run() {
             commands::synthesize_speech,
             commands::speak_speech,
             commands::generate_care_voice_lines,
+            commands::simulate_im_message,
+            commands::get_im_inbox,
+            commands::acknowledge_im_message,
+            commands::acknowledge_all_im_messages,
+            commands::prune_im_noise,
+            commands::draft_im_reply,
+            commands::send_im_reply,
+            commands::wechat_login_start,
+            commands::wechat_login_poll,
+            commands::wechat_logout,
+            commands::wechat_status,
+            commands::wechat_notif_status,
+            commands::open_accessibility_settings,
+            commands::open_wechat_app,
+            commands::copy_text_clipboard,
         ])
         .build(tauri::generate_context!())
         .expect("error while building fluffnest")
         .run(|_app, event| {
             if let RunEvent::Exit = event {
+                crate::wechat_ilink::stop_poller();
+                crate::wechat_notif::stop_watcher();
                 go_bridge::shutdown();
             }
         });

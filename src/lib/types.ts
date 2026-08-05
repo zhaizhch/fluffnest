@@ -121,6 +121,68 @@ export type Settings = {
   alwaysOnTop: boolean;
   isAdmin?: boolean;
   llm?: LlmSettings;
+  wechat?: WechatSettings;
+};
+
+export type WechatSettings = {
+  clawbotEnabled: boolean;
+  notifEnabled: boolean;
+  autoReplyFromWechat: boolean;
+  confirmBeforeSend: boolean;
+  ttsOnIncoming: boolean;
+  urgentBreaksFocus: boolean;
+  nudgeMinutes: number;
+  allowlist: string[];
+};
+
+export type WechatAuth = {
+  botToken?: string;
+  baseUrl?: string;
+  getUpdatesBuf?: string;
+  accountLabel?: string | null;
+};
+
+export type ImMessage = {
+  id: string;
+  source: string;
+  sender: string;
+  text: string;
+  summary?: string | null;
+  urgency?: string | null;
+  contextToken?: string | null;
+  peerUserId?: string | null;
+  receivedAt: string;
+  acknowledged: boolean;
+  lastNudgedAt?: string | null;
+};
+
+export type ImDraftResult = {
+  messageId: string;
+  sender: string;
+  incoming: string;
+  summary: string;
+  draft: string;
+  suggestions: string[];
+  canSend: boolean;
+  channel: string;
+};
+
+export type WechatStatus = {
+  loggedIn: boolean;
+  clawbotEnabled: boolean;
+  polling: boolean;
+  accountLabel?: string | null;
+};
+
+export type WechatNotifStatus = {
+  trusted: boolean;
+  watching: boolean;
+  notifEnabled: boolean;
+};
+
+export type WechatLoginStart = {
+  qrcode: string;
+  qrImage: string;
 };
 
 export type LlmSettings = {
@@ -159,6 +221,10 @@ export type PetSaysPayload = {
   behavior?: string | null;
   /** Weather number card etc. */
   detail?: string | null;
+  /** IM inbox id for wechat cards */
+  messageId?: string | null;
+  /** ClawBot will auto-send; skip parallel draft */
+  autoReplying?: boolean | null;
 };
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {
@@ -180,6 +246,17 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   newsIntervalMinutes: 180,
 };
 
+export const DEFAULT_WECHAT_SETTINGS: WechatSettings = {
+  clawbotEnabled: false,
+  notifEnabled: false,
+  autoReplyFromWechat: true,
+  confirmBeforeSend: true,
+  ttsOnIncoming: false,
+  urgentBreaksFocus: true,
+  nudgeMinutes: 15,
+  allowlist: [],
+};
+
 export type AppState = {
   pets: PetInstance[];
   reminders: ReminderRule[];
@@ -191,6 +268,8 @@ export type AppState = {
   settings: Settings;
   shopCatalog: ShopProduct[];
   chatHistory?: ChatMessage[];
+  wechatAuth?: WechatAuth;
+  imInbox?: ImMessage[];
 };
 
 export type SkinPalette = {

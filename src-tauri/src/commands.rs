@@ -193,6 +193,7 @@ pub fn set_pet_personality(
 pub fn update_settings(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     with_state(&app, |state| {
         let was_proactive = state.settings.llm.proactive_enabled;
+        let wechat_before = state.settings.wechat.clone();
         state.settings = settings.clone();
         // Seed timers so first auto push waits a full interval after enabling
         if state.settings.llm.proactive_enabled && !was_proactive {
@@ -210,7 +211,16 @@ pub fn update_settings(app: AppHandle, settings: Settings) -> Result<Settings, S
         if let Some(win) = app.get_webview_window("pet") {
             let _ = win.set_always_on_top(state.settings.always_on_top);
         }
+        let wechat_changed = wechat_before.clawbot_enabled != state.settings.wechat.clawbot_enabled
+            || wechat_before.notif_enabled != state.settings.wechat.notif_enabled;
         let _ = app.emit("settings-updated", state.settings.clone());
+        if wechat_changed {
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                crate::im::sync_bridges(&app2);
+            });
+        }
         Ok(state.settings.clone())
     })
 }
@@ -603,6 +613,8 @@ pub async fn chat_with_pet(
             kind: "chat".into(),
             behavior: Some("wave".into()),
             detail: None,
+            message_id: None,
+            auto_replying: None,
         },
     );
 
@@ -708,6 +720,8 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
                         kind: "fortune".into(),
                         behavior: Some(crate::llm::proactive_kind_behavior("fortune").into()),
                         detail: None,
+                        message_id: None,
+                        auto_replying: None,
                     };
                     let _ = app.emit("pet-says", payload.clone());
                     let _ = app.emit("proactive-message", payload.clone());
@@ -753,6 +767,8 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
         kind: kind.into(),
         behavior: Some(behavior.into()),
         detail,
+        message_id: None,
+        auto_replying: None,
     };
     let _ = app.emit("pet-says", payload.clone());
     let _ = app.emit("proactive-message", payload.clone());
@@ -873,5 +889,114 @@ pub async fn generate_care_voice_lines(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+// ── WeChat IM bridge ──────────────────────────────────────────────
+
+#[tauri::command]
+pub fn simulate_im_message(
+    app: AppHandle,
+    sender: Option<String>,
+    text: Option<String>,
+) -> Result<Option<crate::state::ImMessage>, String> {
+    crate::im::ingest_message(
+        &app,
+        crate::im::ImIngestRequest {
+            source: "simulate".into(),
+            sender: sender.unwrap_or_else(|| "测试好友".into()),
+            text: text.unwrap_or_else(|| "明天下午三点开会，别忘了".into()),
+            context_token: None,
+            peer_user_id: None,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn get_im_inbox(app: AppHandle) -> Result<Vec<crate::state::ImMessage>, String> {
+    let shared = app.state::<SharedState>();
+    let guard = shared.0.lock().map_err(|e| e.to_string())?;
+    Ok(guard.im_inbox.clone())
+}
+
+#[tauri::command]
+pub fn acknowledge_im_message(app: AppHandle, message_id: String) -> Result<(), String> {
+    crate::im::acknowledge(&app, &message_id)
+}
+
+#[tauri::command]
+pub fn acknowledge_all_im_messages(app: AppHandle) -> Result<usize, String> {
+    crate::im::acknowledge_all(&app)
+}
+
+#[tauri::command]
+pub fn prune_im_noise(app: AppHandle) -> Result<usize, String> {
+    crate::im::prune_noise_inbox(&app)
+}
+
+#[tauri::command]
+pub async fn draft_im_reply(
+    app: AppHandle,
+    message_id: String,
+    refresh: Option<bool>,
+) -> Result<crate::im::ImDraftResult, String> {
+    let refresh = refresh.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::im::draft_reply(&app, &message_id, refresh)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn send_im_reply(
+    app: AppHandle,
+    message_id: String,
+    text: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::im::send_reply(&app, &message_id, &text))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn wechat_login_start(app: AppHandle) -> Result<crate::wechat_ilink::WechatLoginStart, String> {
+    crate::wechat_ilink::start_login(&app)
+}
+
+#[tauri::command]
+pub fn wechat_login_poll(app: AppHandle) -> Result<crate::wechat_ilink::WechatStatus, String> {
+    crate::wechat_ilink::poll_login_status(&app)
+}
+
+#[tauri::command]
+pub fn wechat_logout(app: AppHandle) -> Result<crate::wechat_ilink::WechatStatus, String> {
+    crate::wechat_ilink::logout(&app)
+}
+
+#[tauri::command]
+pub fn wechat_status(app: AppHandle) -> Result<crate::wechat_ilink::WechatStatus, String> {
+    crate::wechat_ilink::status(&app)
+}
+
+#[tauri::command]
+pub fn wechat_notif_status(
+    app: AppHandle,
+) -> Result<crate::wechat_notif::NotifPermissionStatus, String> {
+    crate::wechat_notif::permission_status(&app)
+}
+
+#[tauri::command]
+pub fn open_accessibility_settings() -> Result<(), String> {
+    crate::im::open_accessibility_settings()
+}
+
+#[tauri::command]
+pub fn open_wechat_app() -> Result<(), String> {
+    crate::im::open_wechat()
+}
+
+#[tauri::command]
+pub fn copy_text_clipboard(text: String) -> Result<(), String> {
+    crate::im::copy_clipboard(&text)
 }
 

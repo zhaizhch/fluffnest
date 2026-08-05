@@ -174,7 +174,7 @@ fn bridge() -> &'static Mutex<GoBridge> {
         let http = reqwest::blocking::Client::builder()
             .pool_max_idle_per_host(8)
             .tcp_nodelay(true)
-            .timeout(Duration::from_secs(55))
+            .timeout(Duration::from_secs(90))
             .build()
             .expect("http client");
         Mutex::new(GoBridge {
@@ -210,11 +210,15 @@ pub fn post_json<T: serde::de::DeserializeOwned>(
     path: &str,
     body: &impl serde::Serialize,
 ) -> Result<T, String> {
-    let mut g = bridge().lock().map_err(|e| e.to_string())?;
-    g.ensure_running()?;
-    let url = format!("{}{path}", g.base_url);
-    let resp = g
-        .http
+    // Hold the bridge lock only long enough to ensure the sidecar is up and
+    // to clone the client/URL. Never hold it across the LLM HTTP round-trip —
+    // otherwise triage / auto-reply /「重新建议」serialize and look broken.
+    let (http, url) = {
+        let mut g = bridge().lock().map_err(|e| e.to_string())?;
+        g.ensure_running()?;
+        (g.http.clone(), format!("{}{path}", g.base_url))
+    };
+    let resp = http
         .post(&url)
         .json(body)
         .send()
@@ -227,7 +231,7 @@ pub fn post_json<T: serde::de::DeserializeOwned>(
         }
         return Err(format!("Go AI 错误 ({status}): {text}"));
     }
-    serde_json::from_str(&text).map_err(|e| format!("解析 Go AI 响应失败: {e}"))
+    serde_json::from_str(&text).map_err(|e| format!("Go AI 响应解析失败: {e} / {text}"))
 }
 
 #[derive(serde::Deserialize)]

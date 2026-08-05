@@ -961,3 +961,197 @@ label.field input {
   margin-top: 8px;
 }
 
+.tabs button.tab-wechat:not(.active) {
+  border-color: rgba(45, 140, 90, 0.45);
+  color: #1f6b45;
+  background: rgba(45, 140, 90, 0.08);
+}
+
+.wechat-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(45, 140, 90, 0.28);
+  background: rgba(45, 140, 90, 0.08);
+}
+
+.wechat-entry strong {
+  display: block;
+}
+
+.wechat-entry small {
+  display: block;
+  margin-top: 2px;
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.wechat-step {
+  margin: 14px 0;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--line);
+}
+
+.wechat-step h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.wechat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.wechat-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.wechat-qr img {
+  width: 200px;
+  height: 200px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.im-inbox {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+h3:has(.im-ack-all),
+.im-inbox-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.im-ack-all {
+  margin-left: 0;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(80, 60, 40, 0.16);
+  background: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+}
+
+.im-ack-all:hover {
+  background: rgba(45, 140, 90, 0.12);
+}
+
+.im-inbox li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.im-inbox li.acked {
+  opacity: 0.55;
+}
+
+.im-inbox li.empty {
+  justify-content: center;
+  opacity: 0.7;
+}
+
+.im-inbox p {
+  margin: 4px 0 0;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.im-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.im-draft {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 248, 240, 0.7);
+}
+
+.im-draft-incoming-label {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: rgba(70, 55, 40, 0.7);
+}
+
+.im-draft-incoming {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(80, 60, 40, 0.12);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.im-suggests {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.im-suggests button {
+  text-align: left;
+  border: 1px solid rgba(80, 60, 40, 0.14);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.55);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.im-suggests button:hover,
+.im-suggests button.active {
+  border-color: rgba(45, 140, 90, 0.45);
+  background: rgba(45, 140, 90, 0.1);
+}
+
+.im-draft textarea {
+  width: 100%;
+  margin-top: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(80, 60, 40, 0.18);
+  padding: 8px 10px;
+  resize: vertical;
+  font: inherit;
+}
+
+.tabs {
+  flex-wrap: wrap;
+}
+

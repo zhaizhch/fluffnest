@@ -54,6 +54,7 @@ const MENU_SIZE = { w: 520, h: 400 };
 const FORTUNE_SIZE = { w: 540, h: 460 };
 const WEATHER_SIZE = { w: 540, h: 440 };
 const NEWS_SIZE = { w: 540, h: 460 };
+const WECHAT_SIZE = { w: 560, h: 520 };
 
 function pickBubble(_speciesId: string, behavior: PetBehavior): string | null {
   const cat = getCatalogAction(behavior);
@@ -82,10 +83,31 @@ export function PetApp() {
   const [menuBusy, setMenuBusy] = useState(false);
   const [fortuneText, setFortuneText] = useState<string | null>(null);
   const [infoCard, setInfoCard] = useState<{
-    kind: "weather" | "news";
+    kind: "weather" | "news" | "wechat";
     title: string;
     summary: string;
     tip: string;
+    messageId?: string;
+    canSend?: boolean;
+    draft?: string;
+    sender?: string;
+    incoming?: string;
+    suggestions?: string[];
+  } | null>(null);
+  const [imUnread, setImUnread] = useState(0);
+  const [wechatPending, setWechatPending] = useState(0);
+  const [latestImId, setLatestImIdState] = useState<string | null>(null);
+  const latestImIdRef = useRef<string | null>(null);
+  const setLatestImId = (id: string | null) => {
+    latestImIdRef.current = id;
+    setLatestImIdState(id);
+  };
+  const pendingWechatRef = useRef<{
+    messageId: string;
+    text: string;
+    incoming?: string;
+    sender?: string;
+    error?: string;
   } | null>(null);
   const [careAlert, setCareAlert] = useState<CareAlertPlan | null>(null);
   const [dancePose, setDancePose] = useState<DancePose | null>(null);
@@ -117,6 +139,57 @@ export function PetApp() {
     if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current);
     bubbleTimer.current = window.setTimeout(() => setBubble(null), ms);
   }, []);
+
+  const flushPendingWechat = useCallback(() => {
+    const pending = pendingWechatRef.current;
+    if (!pending) return false;
+    pendingWechatRef.current = null;
+    setWechatPending(0);
+    setLatestImId(pending.messageId);
+    setMenuOpen(false);
+    setFortuneText(null);
+
+    if (pending.error) {
+      showBubble(`微信自动回复失败：${pending.error}`.slice(0, 48), 4200);
+      setInfoCard({
+        kind: "wechat",
+        title: "微信 · 自动回复失败",
+        summary: pending.incoming || pending.error,
+        tip: pending.error,
+        messageId: pending.messageId,
+        canSend: false,
+        draft: "",
+        sender: pending.sender,
+        incoming: pending.incoming,
+        suggestions: [],
+      });
+    } else {
+      const preview = pending.text.slice(0, 36);
+      showBubble(
+        preview ? `微信已自动回复：${preview}` : "微信已自动回复",
+        4200,
+      );
+      setInfoCard({
+        kind: "wechat",
+        title: "微信 · 已自动回复",
+        summary: pending.incoming || pending.text,
+        tip: "已搜索整理并发送到微信。也可改文案后点「重新建议」。",
+        messageId: pending.messageId,
+        canSend: false,
+        draft: pending.text,
+        sender: pending.sender,
+        incoming: pending.incoming,
+        suggestions: pending.text ? [pending.text] : [],
+      });
+    }
+    void getCurrentWindow()
+      .setSize(new LogicalSize(WECHAT_SIZE.w, WECHAT_SIZE.h))
+      .catch(() => undefined);
+    return true;
+  }, [showBubble]);
+
+  const flushPendingWechatRef = useRef(flushPendingWechat);
+  flushPendingWechatRef.current = flushPendingWechat;
 
   const startCareAlert = useCallback((kind: "water" | "stretch", spokenHint?: string) => {
     if (careAlertRef.current) return;
@@ -496,6 +569,97 @@ export function PetApp() {
         return;
       }
 
+      if (payload.kind === "wechat") {
+        // ClawBot auto-reply stays silent until the user opens the pet.
+        if (payload.autoReplying) {
+          const mid =
+            (payload.messageId && payload.messageId.trim()) ||
+            latestImIdRef.current;
+          if (mid) setLatestImId(mid);
+          return;
+        }
+        setMenuOpen(false);
+        setFortuneText(null);
+        const mid =
+          (payload.messageId && payload.messageId.trim()) ||
+          latestImIdRef.current;
+        if (mid) setLatestImId(mid);
+        setInfoCard({
+          kind: "wechat",
+          title: "微信来信",
+          summary: (payload.detail || "").trim() || "微信",
+          tip: "正在根据来信想回复建议…",
+          messageId: mid ?? undefined,
+          canSend: false,
+          draft: "",
+          incoming: (payload.detail || "").trim() || undefined,
+          suggestions: [],
+        });
+        void getCurrentWindow()
+          .setSize(new LogicalSize(WECHAT_SIZE.w, WECHAT_SIZE.h))
+          .catch(() => undefined);
+        showBubble(payload.text, 4200);
+        if (mid) {
+          void api
+            .draftImReply(mid)
+            .then((d) => {
+              setInfoCard((c) =>
+                c && c.kind === "wechat" && c.messageId === mid
+                  ? {
+                      ...c,
+                      title: "来信 · 回复建议",
+                      sender: d.sender,
+                      incoming: d.incoming || c.summary,
+                      summary: d.summary || d.incoming,
+                      draft: d.draft,
+                      suggestions: d.suggestions ?? [],
+                      canSend: d.canSend,
+                      tip: d.canSend
+                        ? "点选建议，再点「发送」"
+                        : "点选建议，再「复制并打开微信」回车发送",
+                    }
+                  : c,
+              );
+            })
+            .catch((err) => {
+              setInfoCard((c) =>
+                c && c.kind === "wechat" && c.messageId === mid
+                  ? {
+                      ...c,
+                      tip:
+                        String(err).replace(/^.*Error:\s*/i, "") ||
+                        "建议生成失败",
+                    }
+                  : c,
+              );
+            });
+        }
+        if (species === "rising") {
+          void runRisingSteps(
+            [
+              { action: "Hello", durationMs: 2000 },
+              { action: "Stand", durationMs: 1600 },
+            ],
+            { userInitiated: true },
+          );
+          return;
+        }
+        void runSequence(
+          [
+            {
+              behavior: b === "react" ? "react" : "phone",
+              durationMs: 2000,
+              bubble: payload.text,
+              bubbleChance: 1,
+            },
+            { behavior: "idle", durationMs: 800, bubbleChance: 0 },
+          ],
+          species,
+          { userInitiated: true, skipLlm: true },
+        );
+        return;
+      }
+
       showBubble(payload.text, 4200);
       if (species === "rising") {
         void runRisingSteps(
@@ -538,6 +702,9 @@ export function PetApp() {
       .then((s) => {
         settingsRef.current = s.settings;
         focusModeRef.current = s.settings.focusMode;
+        const unread = (s.imInbox ?? []).filter((m) => !m.acknowledged);
+        setImUnread(unread.length);
+        setLatestImId(unread.length ? unread[unread.length - 1]!.id : null);
       })
       .catch(() => undefined);
 
@@ -636,6 +803,41 @@ export function PetApp() {
       ),
       listen<PetSaysPayload>("pet-says", (e) => {
         playPetSaysRef.current(e.payload);
+      }),
+      listen("im-inbox-updated", () => {
+        void api.getImInbox().then((inbox) => {
+          const unread = inbox.filter((m) => !m.acknowledged).length;
+          setImUnread(unread);
+          const latest = [...inbox].reverse().find((m) => !m.acknowledged);
+          setLatestImId(latest?.id ?? null);
+        });
+      }),
+      listen<{ id?: string; messageId?: string }>("im-message", (e) => {
+        const id = e.payload?.id || e.payload?.messageId;
+        if (id) setLatestImId(id);
+      }),
+      listen<{
+        messageId?: string;
+        text?: string;
+        incoming?: string;
+        sender?: string;
+        error?: string;
+        pending?: boolean;
+      }>("im-auto-replied", (e) => {
+        const mid = e.payload?.messageId;
+        if (!mid) return;
+        const text = (e.payload?.text || "").trim();
+        const error = (e.payload?.error || "").trim() || undefined;
+        // Always queue — show only when the user opens the pet.
+        pendingWechatRef.current = {
+          messageId: mid,
+          text,
+          incoming: e.payload?.incoming,
+          sender: e.payload?.sender,
+          error,
+        };
+        setWechatPending(1);
+        setLatestImId(mid);
       }),
       listen<{ kind: string; tip: string }>("info-card-tip", (e) => {
         const { kind, tip } = e.payload;
@@ -852,6 +1054,9 @@ export function PetApp() {
       suppressClick.current = false;
       return;
     }
+    if (flushPendingWechatRef.current()) {
+      return;
+    }
     clickCount.current += 1;
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(async () => {
@@ -943,11 +1148,12 @@ export function PetApp() {
   }, [setPetWindowSize]);
 
   const openMenu = useCallback(() => {
+    if (flushPendingWechat()) return;
     setFortuneText(null);
     setInfoCard(null);
     setMenuOpen(true);
     void setPetWindowSize(MENU_SIZE.w, MENU_SIZE.h);
-  }, [setPetWindowSize]);
+  }, [flushPendingWechat, setPetWindowSize]);
 
   useEffect(() => {
     if (!menuOpen && !fortuneText && !infoCard) return;
@@ -1086,6 +1292,72 @@ export function PetApp() {
     [showBubble],
   );
 
+  const runQuickWechat = useCallback(async () => {
+    if (flushPendingWechat()) return;
+    if (!latestImId) {
+      showBubble("暂时没有未读微信", 2400);
+      return;
+    }
+    setMenuBusy(true);
+    try {
+      const draft = await api.draftImReply(latestImId);
+      setMenuOpen(false);
+      setFortuneText(null);
+      setInfoCard({
+        kind: "wechat",
+        title: draft.canSend ? "确认发送回复" : "来信 · 回复建议",
+        summary: draft.summary || draft.incoming,
+        tip: draft.canSend
+          ? "点选建议后点「发送」即可发出。"
+          : "点选建议，再「复制并打开微信」，回车发送。",
+        messageId: draft.messageId,
+        canSend: draft.canSend,
+        draft: draft.draft,
+        sender: draft.sender,
+        incoming: draft.incoming,
+        suggestions: draft.suggestions ?? [],
+      });
+      void getCurrentWindow()
+        .setSize(new LogicalSize(WECHAT_SIZE.w, WECHAT_SIZE.h))
+        .catch(() => undefined);
+      showBubble("草稿好了，点卡片上的按钮回复～", 3200);
+    } catch (err) {
+      showBubble(String(err).replace(/^.*Error:\s*/i, "") || "处理失败", 2800);
+    } finally {
+      setMenuBusy(false);
+    }
+  }, [flushPendingWechat, latestImId, showBubble]);
+
+  const confirmWechatReply = useCallback(async () => {
+    if (!infoCard?.messageId) return;
+    const text = (infoCard.draft || infoCard.summary || "").trim();
+    if (!text) {
+      showBubble("回复内容是空的", 2200);
+      return;
+    }
+    setMenuBusy(true);
+    try {
+      const result = await api.sendImReply(infoCard.messageId, text);
+      if (result === "sent") {
+        showBubble("已发送～", 2800);
+      } else if (result === "pasted") {
+        showBubble("已打开微信并粘贴，回车发送吧", 3600);
+      } else {
+        showBubble("已复制并打开微信，在输入框 Cmd+V 后回车", 4000);
+      }
+      setInfoCard(null);
+      void setPetWindowSize(PET_SIZE.w, PET_SIZE.h);
+      const inbox = await api.getImInbox();
+      const unread = inbox.filter((m) => !m.acknowledged);
+      setImUnread(unread.length);
+      setLatestImId(unread.length ? unread[unread.length - 1]!.id : null);
+    } catch (err) {
+      showBubble(String(err).replace(/^.*Error:\s*/i, "") || "回复失败", 3000);
+    } finally {
+      setMenuBusy(false);
+    }
+  }, [infoCard, setPetWindowSize, showBubble]);
+
   const species = pet?.speciesId ?? "mochi";
   const visual = resolveVisualBehavior(behavior);
 
@@ -1195,9 +1467,11 @@ export function PetApp() {
         open={menuOpen}
         busy={menuBusy}
         petName={pet?.name ?? "绒窝"}
+        imUnread={imUnread + wechatPending}
         onClose={closeMenu}
         onAction={(a) => void runQuickAction(a)}
         onChat={runQuickChat}
+        onWechat={runQuickWechat}
         onRemind={runQuickRemind}
       />
       {fortuneText && (
@@ -1228,7 +1502,13 @@ export function PetApp() {
       )}
       {infoCard && (
         <aside
-          className={`fortune-card ${infoCard.kind === "weather" ? "weather-card" : "news-card"}`}
+          className={`fortune-card ${
+            infoCard.kind === "weather"
+              ? "weather-card"
+              : infoCard.kind === "news"
+                ? "news-card"
+                : "wechat-card"
+          }`}
           role="dialog"
           aria-label={infoCard.title}
           onPointerDown={(e) => e.stopPropagation()}
@@ -1250,10 +1530,144 @@ export function PetApp() {
             </button>
           </header>
           <div className="fortune-card-body">
-            <pre className="weather-stats">{infoCard.summary}</pre>
-            {infoCard.tip && infoCard.tip !== infoCard.summary ? (
-              <p className="weather-tip">{infoCard.tip}</p>
-            ) : null}
+            {infoCard.kind === "wechat" && infoCard.messageId ? (
+              <>
+                <div className="wechat-incoming">
+                  <p className="wechat-incoming-label">
+                    {infoCard.sender ? `${infoCard.sender} 说` : "对方说"}
+                  </p>
+                  <pre className="wechat-incoming-text">
+                    {infoCard.incoming || infoCard.summary || "（未读到正文）"}
+                  </pre>
+                  {infoCard.summary &&
+                  infoCard.incoming &&
+                  infoCard.summary !== infoCard.incoming ? (
+                    <p className="weather-tip">概括：{infoCard.summary}</p>
+                  ) : null}
+                </div>
+                {infoCard.suggestions && infoCard.suggestions.length > 0 ? (
+                  <div className="wechat-suggests" role="list">
+                    {infoCard.suggestions.map((s, i) => (
+                      <button
+                        key={`${i}-${s.slice(0, 12)}`}
+                        type="button"
+                        role="listitem"
+                        className={`wechat-suggest${
+                          infoCard.draft === s ? " active" : ""
+                        }`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setInfoCard((c) => (c ? { ...c, draft: s } : c));
+                        }}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="weather-tip">
+                    {infoCard.tip || "正在想回复建议…"}
+                  </p>
+                )}
+                <textarea
+                  className="wechat-reply-input"
+                  rows={3}
+                  value={infoCard.draft ?? ""}
+                  placeholder="写回复或点选上方建议…"
+                  onChange={(e) =>
+                    setInfoCard((c) =>
+                      c ? { ...c, draft: e.target.value } : c,
+                    )
+                  }
+                  onPointerDown={(e) => e.stopPropagation()}
+                />
+                <div className="wechat-reply-actions">
+                  <button
+                    type="button"
+                    className="wechat-reply-btn"
+                    disabled={menuBusy || !(infoCard.draft ?? "").trim()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void confirmWechatReply();
+                    }}
+                  >
+                    {infoCard.canSend ? "发送" : "复制并打开微信"}
+                  </button>
+                  <button
+                    type="button"
+                    className="wechat-reply-btn ghost"
+                    disabled={menuBusy || !infoCard.messageId}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void (async () => {
+                        const mid = infoCard.messageId;
+                        if (!mid) {
+                          showBubble("找不到这条消息，请从面板收件箱再试", 2800);
+                          return;
+                        }
+                        setMenuBusy(true);
+                        setInfoCard((c) =>
+                          c
+                            ? {
+                                ...c,
+                                tip: "正在重新想回复建议…",
+                                suggestions: [],
+                              }
+                            : c,
+                        );
+                        try {
+                          const d = await api.draftImReply(mid, true);
+                          setInfoCard((c) =>
+                            c && c.messageId === mid
+                              ? {
+                                  ...c,
+                                  title: "来信 · 回复建议",
+                                  sender: d.sender,
+                                  incoming: d.incoming,
+                                  summary: d.summary || d.incoming,
+                                  draft: d.draft,
+                                  suggestions: d.suggestions ?? [],
+                                  canSend: d.canSend,
+                                  tip: d.canSend
+                                    ? "点选建议后点「发送」"
+                                    : "点选建议后「复制并打开微信」",
+                                }
+                              : c,
+                          );
+                        } catch (err) {
+                          showBubble(
+                            String(err).replace(/^.*Error:\s*/i, "") ||
+                              "重新建议失败",
+                            3200,
+                          );
+                          setInfoCard((c) =>
+                            c
+                              ? {
+                                  ...c,
+                                  tip:
+                                    String(err).replace(/^.*Error:\s*/i, "") ||
+                                    "重新建议失败",
+                                }
+                              : c,
+                          );
+                        } finally {
+                          setMenuBusy(false);
+                        }
+                      })();
+                    }}
+                  >
+                    {menuBusy ? "生成中…" : "重新建议"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <pre className="weather-stats">{infoCard.summary}</pre>
+                {infoCard.tip && infoCard.tip !== infoCard.summary ? (
+                  <p className="weather-tip">{infoCard.tip}</p>
+                ) : null}
+              </>
+            )}
           </div>
         </aside>
       )}

@@ -206,6 +206,98 @@ impl Default for LlmSettings {
     }
 }
 
+fn default_nudge_minutes() -> i32 {
+    15
+}
+fn default_confirm_before_send() -> bool {
+    true
+}
+
+fn default_auto_reply_from_wechat() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WechatSettings {
+    /// Channel A: official ClawBot / iLink long-poll.
+    #[serde(default)]
+    pub clawbot_enabled: bool,
+    /// Channel C: macOS WeChat notification banners (Accessibility).
+    #[serde(default)]
+    pub notif_enabled: bool,
+    /// When true, inbound ClawBot DMs are answered via pet chat + sendmessage.
+    #[serde(default = "default_auto_reply_from_wechat")]
+    pub auto_reply_from_wechat: bool,
+    /// Panel / QuickMenu outbound always confirms when true (default).
+    #[serde(default = "default_confirm_before_send")]
+    pub confirm_before_send: bool,
+    #[serde(default)]
+    pub tts_on_incoming: bool,
+    /// Allow urgent triage to surface even in focus mode.
+    #[serde(default)]
+    pub urgent_breaks_focus: bool,
+    /// Re-nudge unacknowledged important messages after N minutes (0 = off).
+    #[serde(default = "default_nudge_minutes")]
+    pub nudge_minutes: i32,
+    /// Optional sender substrings; empty = allow all.
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+}
+
+impl Default for WechatSettings {
+    fn default() -> Self {
+        Self {
+            clawbot_enabled: false,
+            notif_enabled: false,
+            auto_reply_from_wechat: true,
+            confirm_before_send: true,
+            tts_on_incoming: false,
+            urgent_breaks_focus: true,
+            nudge_minutes: default_nudge_minutes(),
+            allowlist: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WechatAuth {
+    #[serde(default)]
+    pub bot_token: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub get_updates_buf: String,
+    #[serde(default)]
+    pub account_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImMessage {
+    pub id: String,
+    /// clawbot | notif | simulate
+    pub source: String,
+    pub sender: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// urgent | normal | noise
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub urgency: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_token: Option<String>,
+    /// Peer user id for ClawBot replies (inbound from_user_id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_user_id: Option<String>,
+    pub received_at: String,
+    #[serde(default)]
+    pub acknowledged: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_nudged_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -217,6 +309,8 @@ pub struct Settings {
     pub is_admin: bool,
     #[serde(default)]
     pub llm: LlmSettings,
+    #[serde(default)]
+    pub wechat: WechatSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,6 +334,12 @@ pub struct AppState {
     /// Recent chat turns with the active pet (persisted).
     #[serde(default)]
     pub chat_history: Vec<crate::llm::ChatMessage>,
+    /// WeChat ClawBot credentials + long-poll cursor (local only).
+    #[serde(default)]
+    pub wechat_auth: WechatAuth,
+    /// Recent inbound IM messages (newest last; capped).
+    #[serde(default)]
+    pub im_inbox: Vec<ImMessage>,
 }
 
 fn today_local() -> String {
@@ -392,9 +492,12 @@ impl Default for AppState {
                 always_on_top: true,
                 is_admin: false,
                 llm: LlmSettings::default(),
+                wechat: WechatSettings::default(),
             },
             shop_catalog: default_shop_catalog(),
             chat_history: Vec::new(),
+            wechat_auth: WechatAuth::default(),
+            im_inbox: Vec::new(),
         }
     }
 }
