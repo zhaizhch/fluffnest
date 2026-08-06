@@ -51,6 +51,7 @@ export function PetFigure({
             species={species}
             behavior={behavior}
             facing={facing}
+            onTap={onTap}
           />
         </Suspense>
       </div>

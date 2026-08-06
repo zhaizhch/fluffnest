@@ -40,6 +40,8 @@ type Props = {
   facing?: "left" | "right";
   /** Ignored — Live2D uses a fixed view size for stable framing. */
   size?: number;
+  /** Short tap (stops bubbling so the pet shell doesn't double-fire). */
+  onTap?: () => void;
 };
 
 type Live2DModelInstance = {
@@ -216,6 +218,7 @@ export function Live2DPet({
   species = "tororo",
   behavior,
   facing = "right",
+  onTap,
 }: Props) {
   const meta = MODEL_BY_SPECIES[species] ?? MODEL_BY_SPECIES.tororo!;
   const hostRef = useRef<HTMLDivElement>(null);
@@ -350,6 +353,11 @@ export function Live2DPet({
       className={`live2d-pet live2d-pet--${status}`}
       style={{ width: VIEW_W, height: VIEW_H }}
       onPointerMove={onPointerMove}
+      onClick={(e) => {
+        if (!onTap) return;
+        e.stopPropagation();
+        onTap();
+      }}
       role="img"
       aria-label={meta.label}
     >
