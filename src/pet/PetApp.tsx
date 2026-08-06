@@ -353,10 +353,16 @@ export function PetApp() {
   const maybeMove = useCallback(async (tiny = false) => {
     try {
       const win = getCurrentWindow();
-      const pos = await win.outerPosition();
-      const scale = await win.scaleFactor();
+      const [pos, scale, mon, size] = await Promise.all([
+        win.outerPosition(),
+        win.scaleFactor(),
+        win.currentMonitor(),
+        win.outerSize(),
+      ]);
       const logicalX = pos.x / scale;
       const logicalY = pos.y / scale;
+      const ww = size.width / scale;
+      const wh = size.height / scale;
       if (Math.random() < 0.4) walkDir.current *= -1;
       setFacing(walkDir.current > 0 ? "right" : "left");
       const stepX = tiny
@@ -365,11 +371,26 @@ export function PetApp() {
       const stepY = tiny
         ? (Math.random() - 0.5) * 10
         : (Math.random() - 0.5) * 28;
-      const nx = Math.max(
-        24,
-        Math.min(1180, logicalX + walkDir.current * stepX),
+      const margin = 24;
+      const monScale = mon?.scaleFactor ?? scale;
+      const minX = mon ? mon.position.x / monScale + margin : 24;
+      const minY = mon ? mon.position.y / monScale + margin + 28 : 48;
+      const maxX = mon
+        ? mon.position.x / monScale + mon.size.width / monScale - ww - margin
+        : 900;
+      const maxY = mon
+        ? mon.position.y / monScale + mon.size.height / monScale - wh - margin
+        : 640;
+      // Keep idle roam in the left ~45% so it doesn't vanish on ultrawides.
+      const softMaxX = Math.min(
+        maxX,
+        minX + Math.min(720, Math.max(280, (maxX - minX) * 0.45)),
       );
-      const ny = Math.max(48, Math.min(720, logicalY + stepY));
+      const nx = Math.max(
+        minX,
+        Math.min(softMaxX, logicalX + walkDir.current * stepX),
+      );
+      const ny = Math.max(minY, Math.min(maxY, logicalY + stepY));
       await win.setPosition(new LogicalPosition(nx, ny));
     } catch {
       /* ignore */
@@ -379,19 +400,39 @@ export function PetApp() {
   const maybeWarp = useCallback(async () => {
     try {
       const win = getCurrentWindow();
-      const pos = await win.outerPosition();
-      const scale = await win.scaleFactor();
+      const [pos, scale, mon, size] = await Promise.all([
+        win.outerPosition(),
+        win.scaleFactor(),
+        win.currentMonitor(),
+        win.outerSize(),
+      ]);
       const logicalX = pos.x / scale;
       const logicalY = pos.y / scale;
+      const ww = size.width / scale;
+      const wh = size.height / scale;
       walkDir.current = Math.random() < 0.5 ? -1 : 1;
       setFacing(walkDir.current > 0 ? "right" : "left");
+      const margin = 24;
+      const monScale = mon?.scaleFactor ?? scale;
+      const minX = mon ? mon.position.x / monScale + margin : 40;
+      const minY = mon ? mon.position.y / monScale + margin + 28 : 60;
+      const maxX = mon
+        ? mon.position.x / monScale + mon.size.width / monScale - ww - margin
+        : 900;
+      const maxY = mon
+        ? mon.position.y / monScale + mon.size.height / monScale - wh - margin
+        : 640;
+      const softMaxX = Math.min(
+        maxX,
+        minX + Math.min(720, Math.max(280, (maxX - minX) * 0.45)),
+      );
       const nx = Math.max(
-        40,
-        Math.min(1100, logicalX + walkDir.current * (120 + Math.random() * 220)),
+        minX,
+        Math.min(softMaxX, logicalX + walkDir.current * (80 + Math.random() * 140)),
       );
       const ny = Math.max(
-        60,
-        Math.min(680, logicalY + (Math.random() - 0.5) * 160),
+        minY,
+        Math.min(maxY, logicalY + (Math.random() - 0.5) * 120),
       );
       await win.setPosition(new LogicalPosition(nx, ny));
     } catch {

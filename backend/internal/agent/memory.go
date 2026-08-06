@@ -186,6 +186,49 @@ func (m *Memory) Delete(peerID, key string, global bool) error {
 	return m.saveLocked()
 }
 
+// Search returns key/value pairs whose key or value contains query (case-insensitive).
+func (m *Memory) Search(peerID, query string, limit int) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 8
+	}
+	var hits []string
+	add := func(scope, key string, it MemoryItem) {
+		if len(hits) >= limit {
+			return
+		}
+		blob := strings.ToLower(key + " " + it.Value)
+		if strings.Contains(blob, query) {
+			hits = append(hits, fmt.Sprintf("[%s] %s = %s", scope, key, it.Value))
+		}
+	}
+	for k, v := range m.Global {
+		add("global", k, v)
+	}
+	peerID = strings.TrimSpace(peerID)
+	if peerID != "" {
+		for k, v := range m.Peers[peerID] {
+			add("peer", k, v)
+		}
+		if sess, ok := m.Sessions[peerID]; ok {
+			for _, n := range sess.Notes {
+				if len(hits) >= limit {
+					break
+				}
+				if strings.Contains(strings.ToLower(n), query) {
+					hits = append(hits, "[session] "+n)
+				}
+			}
+		}
+	}
+	return hits
+}
+
 func (m *Memory) AddSessionNote(peerID, note string) error {
 	peerID = strings.TrimSpace(peerID)
 	note = strings.TrimSpace(note)

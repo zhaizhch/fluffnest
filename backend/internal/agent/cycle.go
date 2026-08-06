@@ -87,18 +87,25 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	deps.PeerID = req.PeerID
 	deps.Catalog = rt.Catalog
 	deps.Memory = rt.Memory
+	deps.Pet = req.Pet
+	deps.LLM = rt.LLM
+	deps.LlmCfg = req.LLM
 	if req.Host != nil {
 		deps.Host = &HostBridge{Snapshot: *req.Host}
 	} else {
 		deps.Host = &HostBridge{}
 	}
 
-	matched := rt.Catalog.MatchSkills(req.Message)
+	lastSkills := readLastSkills(rt.Memory, req.PeerID)
+	matched := rt.Catalog.RouteSkills(req.Message, req.History, lastSkills)
 	var matchedNames []string
 	var skillBlocks []string
 	for _, sk := range matched {
 		matchedNames = append(matchedNames, sk.Name)
 		skillBlocks = append(skillBlocks, fmt.Sprintf("### Suggested Skill: %s\n%s\n\n%s", sk.Name, sk.Description, sk.Body))
+	}
+	if routeNote := FormatRoutedSkills(matched); routeNote != "" {
+		log.Printf("[agent] routed skills=%s peer=%s", routeNote, shortPeer(req.PeerID))
 	}
 
 	system := rt.buildSystemPrompt(req.Pet, channel, city, skillBlocks)
@@ -112,8 +119,9 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	if deps.Host != nil {
 		messages = append(messages, llm.ChatMessage{
-			Role:    "system",
-			Content: "## Desktop Host State\n" + deps.Host.SnapshotText() + "\n管理提醒/定时推送请用 reminder_* / schedule_* 工具。",
+			Role: "system",
+			Content: "## Desktop Host State\n" + deps.Host.SnapshotText() +
+				"\n管理提醒/定时推送请用 reminder_* / schedule_*；让桌宠立刻冒泡用 pet_notify。",
 		})
 	}
 
@@ -134,7 +142,7 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	messages = append(messages, llm.ChatMessage{
 		Role: "user",
 		Content: fmt.Sprintf(
-			"主人微信消息：%s\n\n请按 Agent Cycle 工作：\n1) 判断是否命中 skill（可用 load_skill）\n2) 需要事实则调用 tools\n3) 可读写 memory\n4) 产出最终微信回复（不要再调用工具时直接给最终回复文本）",
+			"主人微信消息：%s\n\n请按 Agent Cycle 工作：\n1) 参考已路由的 skills（也可用 load_skill 补载）\n2) 需要事实/时间/计算则调用 tools\n3) 翻译摘要用 rewrite_text；要桌宠冒泡用 pet_notify\n4) 可读写 memory\n5) 产出最终微信回复（不要再调用工具时直接给最终回复文本）",
 			strings.TrimSpace(req.Message),
 		),
 	})
@@ -168,6 +176,7 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 			}
 			_ = rt.Memory.AddSessionNote(req.PeerID, "Q: "+truncateRunes(req.Message, 80))
 			_ = rt.Memory.AddSessionNote(req.PeerID, "A: "+truncateRunes(text, 80))
+			writeLastSkills(rt.Memory, req.PeerID, uniq(skillsUsed))
 			log.Printf("[agent] peer=%s cycles=%d tools=%v skills=%v", shortPeer(req.PeerID), cycle, toolsUsed, skillsUsed)
 			return withHost(Result{
 				Text:       text,
@@ -216,11 +225,15 @@ func withHost(res Result, deps ToolDeps) Result {
 
 func (rt *Runtime) buildSystemPrompt(pet types.PetInstance, channel, city string, skillBlocks []string) string {
 	var b strings.Builder
+	persona := pet.Personality
+	if note := strings.TrimSpace(pet.PersonalityNote); note != "" {
+		persona = persona + "；设定：" + note
+	}
 	fmt.Fprintf(&b,
 		"你是桌宠「%s」的微信 Agent（性格：%s）。\n"+
 			"你不是只会闲聊的气泡回复器；你是带 tools / rules / skills / memory / cycle 的智能体。\n"+
 			"默认城市：%s。频道：%s。\n\n",
-		pet.Name, pet.Personality, city, channel,
+		pet.Name, persona, city, channel,
 	)
 	b.WriteString(rt.Catalog.RulesPrompt(channel))
 	b.WriteString("\n\n## Available Skills\n")
@@ -259,6 +272,7 @@ func (rt *Runtime) synthesize(
 	if text == "" {
 		return Result{}, fmt.Errorf("未能整理出回复")
 	}
+	writeLastSkills(rt.Memory, req.PeerID, uniq(skillsUsed))
 	return withHost(Result{
 		Text:       text,
 		Cycles:     cycles,
@@ -282,6 +296,7 @@ func (rt *Runtime) fallback(ctx context.Context, req Request, deps ToolDeps, cit
 		return Result{}, err
 	}
 	text := llm.CleanWechatReply(raw, MaxReplyChars)
+	writeLastSkills(rt.Memory, req.PeerID, uniq(skills))
 	return withHost(Result{
 		Text:       text,
 		Cycles:     1,
@@ -335,4 +350,32 @@ func shortPeer(id string) string {
 		return id
 	}
 	return string(r[:8]) + "…"
+}
+
+const lastSkillsKey = "last_skills"
+
+func readLastSkills(mem *Memory, peerID string) []string {
+	if mem == nil {
+		return nil
+	}
+	v, ok := mem.Read(peerID, lastSkillsKey)
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func writeLastSkills(mem *Memory, peerID string, skills []string) {
+	if mem == nil || peerID == "" || len(skills) == 0 {
+		return
+	}
+	_ = mem.Write(peerID, lastSkillsKey, strings.Join(uniq(skills), ","), "agent", false)
 }

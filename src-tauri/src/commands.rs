@@ -533,6 +533,7 @@ pub fn apply_host_actions(app: &AppHandle, actions: &[Value]) -> Vec<String> {
         Err(e) => return vec![format!("lock error: {e}")],
     };
     let mut notes = Vec::new();
+    let mut pet_says: Vec<crate::llm::PetSaysPayload> = Vec::new();
     for action in actions {
         let op = action
             .get("op")
@@ -544,11 +545,63 @@ pub fn apply_host_actions(app: &AppHandle, actions: &[Value]) -> Vec<String> {
             .and_then(|v| v.as_object())
             .cloned()
             .unwrap_or_else(Map::new);
+        if op == "pet.notify" {
+            let text = args
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if text.is_empty() {
+                notes.push("pet.notify 需要 text".into());
+                continue;
+            }
+            let kind = args
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("agent")
+                .to_string();
+            let behavior = args
+                .get("behavior")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| Some("wave".into()));
+            pet_says.push(crate::llm::PetSaysPayload {
+                text: text.clone(),
+                kind,
+                behavior,
+                detail: args
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                message_id: None,
+                auto_replying: None,
+            });
+            notes.push(format!("已通知桌宠冒泡：{}", truncate_chars(&text, 40)));
+            continue;
+        }
         let note = crate::schedules::apply_host_action(&mut guard, &op, &args);
         notes.push(note);
     }
     let _ = save_state(app, &guard);
+    drop(guard);
+    for payload in pet_says {
+        let _ = app.emit("pet-says", payload.clone());
+        let _ = app.emit("proactive-message", payload);
+    }
     notes
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[tauri::command]

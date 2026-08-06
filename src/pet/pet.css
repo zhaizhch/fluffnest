@@ -29,6 +29,7 @@ html.pet-window #root {
 }
 
 .pet-main {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -36,24 +37,58 @@ html.pet-window #root {
   flex: 1;
   min-width: 0;
   width: 100%;
+  min-height: 0;
 }
 
 .bubble {
-  max-width: 260px;
-  margin-bottom: 6px;
+  position: absolute;
+  left: 50%;
+  /* Sit over the pet's head so long lines aren't clipped by the 420px window. */
+  bottom: 248px;
+  z-index: 6;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(300px, calc(100% - 16px));
+  max-height: 148px;
+  margin: 0;
   padding: 8px 12px;
   border-radius: 14px 14px 14px 4px;
-  background: rgba(255, 252, 248, 0.95);
+  background: rgba(255, 252, 248, 0.96);
   color: var(--ink, #333);
   font-size: 12px;
   letter-spacing: 0.03em;
-  line-height: 1.4;
+  line-height: 1.45;
   box-shadow: 0 8px 22px rgba(30, 20, 10, 0.14);
   border: 1px solid rgba(60, 45, 30, 0.08);
-  animation: pop 0.28s ease;
-  pointer-events: none;
-  z-index: 5;
+  animation: bubble-pop 0.28s ease;
+  pointer-events: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  -webkit-overflow-scrolling: touch;
+  transform: translateX(-50%);
+}
+
+.bubble::-webkit-scrollbar {
+  width: 3px;
+}
+.bubble::-webkit-scrollbar-thumb {
+  background: rgba(90, 70, 50, 0.25);
+  border-radius: 999px;
+}
+
+@keyframes bubble-pop {
+  from {
+    transform: translateX(-50%) translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
 }
 
 @keyframes pop {
@@ -73,13 +108,16 @@ html.pet-window #root {
 }
 
 .care-alert {
-  position: relative;
+  position: absolute;
+  left: 50%;
+  bottom: 300px;
+  transform: translateX(-50%);
   z-index: 8;
   display: flex;
   align-items: center;
   gap: 10px;
   width: min(340px, 92%);
-  margin: 0 auto 10px;
+  margin: 0;
   padding: 12px 14px 12px 12px;
   border-radius: 18px;
   background: linear-gradient(
@@ -94,6 +132,7 @@ html.pet-window #root {
   animation: care-alert-in 0.45s cubic-bezier(0.22, 1.2, 0.36, 1);
   pointer-events: none;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .care-alert-water {
@@ -350,11 +389,11 @@ html.pet-window #root {
 
 @keyframes care-alert-in {
   from {
-    transform: translateY(18px) scale(0.92);
+    transform: translateX(-50%) translateY(18px) scale(0.92);
     opacity: 0;
   }
   to {
-    transform: none;
+    transform: translateX(-50%) translateY(0) scale(1);
     opacity: 1;
   }
 }
@@ -869,6 +908,7 @@ html.pet-window #root {
 
 .stage {
   position: relative;
+  z-index: 1;
   width: 300px;
   height: 340px;
   display: grid;
@@ -1129,6 +1169,8 @@ html.pet-window #root {
 }
 
 .name-tag {
+  position: relative;
+  z-index: 2;
   margin-top: 2px;
   margin-bottom: 6px;
   font-size: 11px;

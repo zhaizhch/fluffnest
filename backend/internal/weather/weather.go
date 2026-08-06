@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -230,6 +231,7 @@ func (s *Service) Fetch(ctx context.Context, city string) (Snapshot, error) {
 }
 
 // FetchDay returns weather for today (offset 0) or a future daily forecast (offset ≥ 1).
+// Primary source: sojson / weather.com.cn (reachable in CN). Open-Meteo is a short fallback.
 func (s *Service) FetchDay(ctx context.Context, city string, dayOffset int) (Snapshot, error) {
 	city = strings.TrimSpace(city)
 	if city == "" {
@@ -241,7 +243,7 @@ func (s *Service) FetchDay(ctx context.Context, city string, dayOffset int) (Sna
 	if dayOffset > 7 {
 		dayOffset = 7
 	}
-	cacheKey := fmt.Sprintf("weather:snap:v2:%s:d%d", city, dayOffset)
+	cacheKey := fmt.Sprintf("weather:snap:v3:%s:d%d", city, dayOffset)
 	if v, ok := s.cache.Get(cacheKey); ok {
 		var snap Snapshot
 		if json.Unmarshal([]byte(v), &snap) == nil && snap.Label != "" {
@@ -249,7 +251,245 @@ func (s *Service) FetchDay(ctx context.Context, city string, dayOffset int) (Sna
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	var lastErr error
+	if snap, err := s.fetchSojson(ctx, city, dayOffset); err == nil {
+		if b, e := json.Marshal(snap); e == nil {
+			s.cache.Set(cacheKey, string(b), 15*time.Minute)
+		}
+		return snap, nil
+	} else {
+		lastErr = err
+	}
+
+	// Open-Meteo often times out in CN; keep a short attempt for overseas networks.
+	if snap, err := s.fetchOpenMeteo(ctx, city, dayOffset); err == nil {
+		if b, e := json.Marshal(snap); e == nil {
+			s.cache.Set(cacheKey, string(b), 15*time.Minute)
+		}
+		return snap, nil
+	} else if lastErr == nil {
+		lastErr = err
+	} else {
+		lastErr = fmt.Errorf("%v；备用源: %w", lastErr, err)
+	}
+	return Snapshot{}, lastErr
+}
+
+type sojsonResp struct {
+	Status   int `json:"status"`
+	CityInfo *struct {
+		City     string `json:"city"`
+		Parent   string `json:"parent"`
+		CityKey  string `json:"citykey"`
+		UpdateAt string `json:"updateTime"`
+	} `json:"cityInfo"`
+	Data *struct {
+		Shidu    string  `json:"shidu"`
+		Wendu    string  `json:"wendu"`
+		Quality  string  `json:"quality"`
+		Ganmao   string  `json:"ganmao"`
+		Forecast []struct {
+			High   string `json:"high"`
+			Low    string `json:"low"`
+			Ymd    string `json:"ymd"`
+			Week   string `json:"week"`
+			Fx     string `json:"fx"`
+			Fl     string `json:"fl"`
+			Type   string `json:"type"`
+			Notice string `json:"notice"`
+			Aqi    float64 `json:"aqi"`
+		} `json:"forecast"`
+	} `json:"data"`
+}
+
+func (s *Service) fetchSojson(ctx context.Context, city string, dayOffset int) (Snapshot, error) {
+	code, label, ok := lookupCityCode(city)
+	if !ok {
+		return Snapshot{}, fmt.Errorf("暂不支持城市「%s」（可试北京/上海/天津等）", city)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+
+	urlStr := "http://t.weather.sojson.com/api/weather/city/" + code
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	req.Header.Set("User-Agent", "FluffNest/0.2 (deskpet)")
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("国内天气源请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return Snapshot{}, fmt.Errorf("国内天气源 HTTP %d", resp.StatusCode)
+	}
+	var raw sojsonResp
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return Snapshot{}, fmt.Errorf("国内天气源解析失败: %w", err)
+	}
+	if raw.Status != 200 || raw.Data == nil || len(raw.Data.Forecast) == 0 {
+		return Snapshot{}, fmt.Errorf("国内天气源无数据")
+	}
+	if dayOffset >= len(raw.Data.Forecast) {
+		return Snapshot{}, fmt.Errorf("无%s预报", dayWord(dayOffset))
+	}
+
+	display := label
+	if raw.CityInfo != nil && strings.TrimSpace(raw.CityInfo.City) != "" {
+		display = strings.TrimSpace(raw.CityInfo.City)
+	}
+
+	day := raw.Data.Forecast[dayOffset]
+	high := parseTempC(day.High)
+	low := parseTempC(day.Low)
+	cond := strings.TrimSpace(day.Type)
+	if cond == "" {
+		cond = "天气一般"
+	}
+
+	if dayOffset == 0 {
+		temp := parseFloat(raw.Data.Wendu)
+		if temp == 0 && high != 0 && low != 0 {
+			temp = (high + low) / 2
+		}
+		// Prefer live SK when available (more precise now-temp / humidity / wind).
+		if sk, err := s.fetchWeatherCNLive(ctx, code); err == nil {
+			if sk.Temp != 0 {
+				temp = sk.Temp
+			}
+			if sk.Condition != "" {
+				cond = sk.Condition
+			}
+			snap := Snapshot{
+				Label:     display,
+				Condition: cond,
+				TempC:     temp,
+				FeelsC:    temp,
+				Humidity:  sk.Humidity,
+				WindKmh:   sk.WindKmh,
+				WindDir:   firstNonEmpty(sk.WindDir, day.Fx),
+				DayOffset: 0,
+				HasDaily:  true,
+				TempMin:   low,
+				TempMax:   high,
+			}
+			if day.Notice != "" {
+				snap.Hints = day.Notice
+			} else {
+				snap.Hints = protectionHints(conditionCodeApprox(cond), snap.TempC, snap.FeelsC, snap.WindKmh, 0, 0, 0)
+			}
+			if raw.Data.Ganmao != "" {
+				if snap.Hints != "" {
+					snap.Hints += "；"
+				}
+				snap.Hints += raw.Data.Ganmao
+			}
+			return snap, nil
+		}
+		hum := parsePercent(raw.Data.Shidu)
+		snap := Snapshot{
+			Label:     display,
+			Condition: cond,
+			TempC:     temp,
+			FeelsC:    temp,
+			Humidity:  hum,
+			WindDir:   day.Fx,
+			WindKmh:   windLevelToKmh(day.Fl),
+			DayOffset: 0,
+			HasDaily:  true,
+			TempMin:   low,
+			TempMax:   high,
+		}
+		if day.Notice != "" {
+			snap.Hints = day.Notice
+		} else {
+			snap.Hints = protectionHints(conditionCodeApprox(cond), snap.TempC, snap.FeelsC, snap.WindKmh, 0, 0, 0)
+		}
+		if raw.Data.Ganmao != "" {
+			if snap.Hints != "" {
+				snap.Hints += "；"
+			}
+			snap.Hints += raw.Data.Ganmao
+		}
+		return snap, nil
+	}
+
+	mid := (high + low) / 2
+	snap := Snapshot{
+		Label:     display,
+		Condition: cond,
+		DayOffset: dayOffset,
+		DailyOnly: true,
+		HasDaily:  true,
+		TempMin:   low,
+		TempMax:   high,
+		TempC:     mid,
+		FeelsC:    mid,
+		WindDir:   day.Fx,
+		WindKmh:   windLevelToKmh(day.Fl),
+	}
+	if day.Notice != "" {
+		snap.Hints = day.Notice
+	} else {
+		snap.Hints = protectionHints(conditionCodeApprox(cond), snap.TempC, snap.FeelsC, snap.WindKmh, 0, 0, 0)
+	}
+	return snap, nil
+}
+
+type liveSK struct {
+	Temp      float64
+	Humidity  float64
+	WindKmh   float64
+	WindDir   string
+	Condition string
+}
+
+func (s *Service) fetchWeatherCNLive(ctx context.Context, code string) (liveSK, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	urlStr := "https://d1.weather.com.cn/sk_2d/" + code + ".html"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return liveSK{}, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 FluffNest/0.2")
+	req.Header.Set("Referer", "https://www.weather.com.cn/")
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return liveSK{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return liveSK{}, fmt.Errorf("sk http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return liveSK{}, err
+	}
+	text := string(body)
+	// var dataSK={...}
+	i := strings.Index(text, "{")
+	j := strings.LastIndex(text, "}")
+	if i < 0 || j <= i {
+		return liveSK{}, fmt.Errorf("sk payload")
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(text[i:j+1]), &raw); err != nil {
+		return liveSK{}, err
+	}
+	out := liveSK{
+		Temp:      parseFloat(fmt.Sprint(raw["temp"])),
+		Humidity:  parsePercent(fmt.Sprint(raw["SD"])),
+		WindDir:   strings.TrimSpace(fmt.Sprint(raw["WD"])),
+		Condition: strings.TrimSpace(fmt.Sprint(raw["weather"])),
+		WindKmh:   parseWindKmh(fmt.Sprint(raw["wse"]), fmt.Sprint(raw["WS"])),
+	}
+	return out, nil
+}
+
+func (s *Service) fetchOpenMeteo(ctx context.Context, city string, dayOffset int) (Snapshot, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer cancel()
 
 	geoURL := "https://geocoding-api.open-meteo.com/v1/search?name=" + url.QueryEscape(city) + "&count=1&language=zh&format=json"
@@ -259,7 +499,7 @@ func (s *Service) FetchDay(ctx context.Context, city string, dayOffset int) (Sna
 	}
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("地理编码失败: %w", err)
+		return Snapshot{}, fmt.Errorf("Open-Meteo 地理编码失败: %w", err)
 	}
 	defer resp.Body.Close()
 	var geo geoResult
@@ -285,7 +525,7 @@ func (s *Service) FetchDay(ctx context.Context, city string, dayOffset int) (Sna
 	}
 	resp2, err := s.http.Do(req2)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("天气请求失败: %w", err)
+		return Snapshot{}, fmt.Errorf("Open-Meteo 天气请求失败: %w", err)
 	}
 	defer resp2.Body.Close()
 	var fc forecast
@@ -344,9 +584,6 @@ func (s *Service) FetchDay(ctx context.Context, city string, dayOffset int) (Sna
 			snap.UVLevel = uvLevelZH(snap.UV)
 		}
 		snap.Hints = protectionHints(cur.WeatherCode, snap.TempC, snap.FeelsC, snap.WindKmh, snap.UV, snap.PrecipNow, snap.PrecipDay)
-		if b, err := json.Marshal(snap); err == nil {
-			s.cache.Set(cacheKey, string(b), 15*time.Minute)
-		}
 		return snap, nil
 	}
 
@@ -377,11 +614,105 @@ func (s *Service) FetchDay(ctx context.Context, city string, dayOffset int) (Sna
 		snap.UVLevel = uvLevelZH(snap.UV)
 	}
 	snap.Hints = protectionHints(code, snap.TempC, snap.FeelsC, 0, snap.UV, 0, snap.PrecipDay)
-	if b, err := json.Marshal(snap); err == nil {
-		s.cache.Set(cacheKey, string(b), 15*time.Minute)
-	}
 	return snap, nil
 }
+
+func parseTempC(s string) float64 {
+	// "高温 37℃" / "低温 28℃" / "37℃"
+	var num strings.Builder
+	dot := false
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			num.WriteRune(r)
+			continue
+		}
+		if r == '.' && !dot {
+			num.WriteRune(r)
+			dot = true
+			continue
+		}
+		if num.Len() > 0 {
+			break
+		}
+	}
+	return parseFloat(num.String())
+}
+
+func parseFloat(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "<nil>" {
+		return 0
+	}
+	var f float64
+	fmt.Sscanf(s, "%f", &f)
+	return f
+}
+
+func parsePercent(s string) float64 {
+	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "%"))
+	return parseFloat(s)
+}
+
+func windLevelToKmh(fl string) float64 {
+	// "1级" → rough mid of Beaufort-ish domestic scale
+	n := parseTempC(fl)
+	switch {
+	case n <= 0:
+		return 0
+	case n == 1:
+		return 5
+	case n == 2:
+		return 12
+	case n == 3:
+		return 20
+	case n == 4:
+		return 30
+	case n == 5:
+		return 40
+	default:
+		return n * 8
+	}
+}
+
+func parseWindKmh(wse, ws string) float64 {
+	if v := parseTempC(wse); v > 0 {
+		return v
+	}
+	return windLevelToKmh(ws)
+}
+
+func conditionCodeApprox(cond string) int {
+	switch {
+	case strings.Contains(cond, "雷"):
+		return 95
+	case strings.Contains(cond, "暴雨"):
+		return 82
+	case strings.Contains(cond, "雨"):
+		return 63
+	case strings.Contains(cond, "雪"):
+		return 73
+	case strings.Contains(cond, "雾"):
+		return 45
+	case strings.Contains(cond, "晴"):
+		return 0
+	case strings.Contains(cond, "云"):
+		return 2
+	case strings.Contains(cond, "阴"):
+		return 3
+	default:
+		return 2
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 
 func protectionHints(code int, temp, feels, wind, uv, precipNow, precipDay float64) string {
 	var tips []string
