@@ -6,8 +6,23 @@ use crate::state::{save_state, ScheduleJob};
 use crate::wechat_ilink;
 use chrono::{Datelike, Local, Timelike};
 use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
+
+fn firing_set() -> &'static Mutex<HashSet<String>> {
+    static CELL: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn last_fail_map() -> &'static Mutex<HashMap<String, Instant>> {
+    static CELL: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+const FAIL_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 pub fn check_schedules(app: &AppHandle) {
     let due = {
@@ -32,7 +47,8 @@ pub fn check_schedules(app: &AppHandle) {
             .schedules
             .iter()
             .filter(|j| j.enabled)
-            .filter(|j| j.hour == hour && j.minute == minute)
+            // Same-day catch-up: fire once after scheduled local time (not only the exact minute).
+            .filter(|j| hour > j.hour || (hour == j.hour && minute >= j.minute))
             .filter(|j| j.last_fired_date.as_deref() != Some(today.as_str()))
             .filter(|j| j.days_of_week.is_empty() || j.days_of_week.contains(&weekday))
             .cloned()
@@ -46,55 +62,108 @@ pub fn check_schedules(app: &AppHandle) {
     }
 }
 
+fn try_begin_fire(id: &str) -> bool {
+    if let Ok(fails) = last_fail_map().lock() {
+        if let Some(at) = fails.get(id) {
+            if at.elapsed() < FAIL_COOLDOWN {
+                return false;
+            }
+        }
+    }
+    let Ok(mut set) = firing_set().lock() else {
+        return false;
+    };
+    set.insert(id.to_string())
+}
+
+fn end_fire(id: &str) {
+    if let Ok(mut set) = firing_set().lock() {
+        set.remove(id);
+    }
+}
+
+fn mark_fire_fail(id: &str) {
+    if let Ok(mut fails) = last_fail_map().lock() {
+        fails.insert(id.to_string(), Instant::now());
+    }
+}
+
+fn clear_fire_fail(id: &str) {
+    if let Ok(mut fails) = last_fail_map().lock() {
+        fails.remove(id);
+    }
+}
+
 fn fire_schedule(app: &AppHandle, job: &ScheduleJob) -> Result<(), String> {
     let today = Local::now().format("%Y-%m-%d").to_string();
 
-    // Mark fired first to avoid double-send if content gen is slow.
-    {
-        let shared = app.state::<SharedState>();
-        let mut guard = shared.0.lock().map_err(|e| e.to_string())?;
-        if let Some(j) = guard.schedules.iter_mut().find(|j| j.id == job.id) {
-            if j.last_fired_date.as_deref() == Some(today.as_str()) {
-                return Ok(());
+    if !try_begin_fire(&job.id) {
+        return Ok(());
+    }
+    let result = (|| -> Result<(), String> {
+        {
+            let shared = app.state::<SharedState>();
+            let guard = shared.0.lock().map_err(|e| e.to_string())?;
+            if let Some(j) = guard.schedules.iter().find(|j| j.id == job.id) {
+                if j.last_fired_date.as_deref() == Some(today.as_str()) {
+                    return Ok(());
+                }
+            } else {
+                return Err("schedule missing".into());
             }
-            j.last_fired_date = Some(today.clone());
         }
-        save_state(app, &guard)?;
-    }
 
-    let text = build_content(app, job)?;
-    if text.trim().is_empty() {
-        return Err("empty schedule content".into());
-    }
-
-    match job.channel.as_str() {
-        "wechat" => push_wechat(app, &text)?,
-        _ => {
-            let _ = app.emit(
-                "pet-says",
-                llm::PetSaysPayload {
-                    text: text.clone(),
-                    kind: format!("schedule-{}", job.kind),
-                    behavior: Some(llm::proactive_kind_behavior("news").into()),
-                    detail: Some(job.title.clone()),
-                    message_id: None,
-                    auto_replying: None,
-                },
-            );
+        let text = build_content(app, job)?;
+        if text.trim().is_empty() {
+            return Err("empty schedule content".into());
         }
-    }
 
-    let _ = app.emit(
-        "schedule-fired",
-        json!({
-            "id": job.id,
-            "title": job.title,
-            "kind": job.kind,
-            "channel": job.channel,
-            "text": text.chars().take(80).collect::<String>(),
-        }),
-    );
-    Ok(())
+        match job.channel.as_str() {
+            "wechat" => push_wechat(app, &text)?,
+            _ => {
+                let _ = app.emit(
+                    "pet-says",
+                    llm::PetSaysPayload {
+                        text: text.clone(),
+                        kind: format!("schedule-{}", job.kind),
+                        behavior: Some(llm::proactive_kind_behavior("news").into()),
+                        detail: Some(job.title.clone()),
+                        message_id: None,
+                        auto_replying: None,
+                    },
+                );
+            }
+        }
+
+        // Mark fired only after successful delivery so catch-up can retry on failure.
+        {
+            let shared = app.state::<SharedState>();
+            let mut guard = shared.0.lock().map_err(|e| e.to_string())?;
+            if let Some(j) = guard.schedules.iter_mut().find(|j| j.id == job.id) {
+                j.last_fired_date = Some(today.clone());
+            }
+            save_state(app, &guard)?;
+        }
+
+        let _ = app.emit(
+            "schedule-fired",
+            json!({
+                "id": job.id,
+                "title": job.title,
+                "kind": job.kind,
+                "channel": job.channel,
+                "text": text.chars().take(80).collect::<String>(),
+            }),
+        );
+        Ok(())
+    })();
+
+    end_fire(&job.id);
+    match &result {
+        Ok(()) => clear_fire_fail(&job.id),
+        Err(_) => mark_fire_fail(&job.id),
+    }
+    result
 }
 
 fn build_content(app: &AppHandle, job: &ScheduleJob) -> Result<String, String> {
@@ -115,19 +184,18 @@ fn build_content(app: &AppHandle, job: &ScheduleJob) -> Result<String, String> {
 
     match job.kind.as_str() {
         "weather_forecast" => {
-            let city = param_str(&job.params, "city")
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| llm.weather_city.clone());
-            let mut settings = llm.clone();
-            settings.weather_city = city.clone();
-            let (tip, summary) = llm::generate_weather_bubble(&settings, &pet)?;
+            let cities = weather_cities(&job.params, &llm.weather_city);
             let for_tomorrow = param_bool(&job.params, "forTomorrow").unwrap_or(true);
-            let head = if for_tomorrow {
-                format!("【{} · 明日天气】{}", job.title, city)
-            } else {
-                format!("【{} · 天气】{}", job.title, city)
-            };
-            Ok(format!("{head}\n{summary}\n{tip}"))
+            let label = if for_tomorrow { "明日天气" } else { "天气" };
+            let mut parts = vec![format!("【{} · {}】", job.title, label)];
+            for city in &cities {
+                let mut settings = llm.clone();
+                settings.weather_city = city.clone();
+                let (tip, summary) =
+                    llm::generate_weather_bubble_ex(&settings, &pet, city, for_tomorrow)?;
+                parts.push(format!("—— {city} ——\n{summary}\n{tip}"));
+            }
+            Ok(parts.join("\n\n"))
         }
         "news_brief" => {
             let lookback = param_i64(&job.params, "lookbackHours").unwrap_or(24);
@@ -146,6 +214,32 @@ fn build_content(app: &AppHandle, job: &ScheduleJob) -> Result<String, String> {
             llm::generate_chat_reply(&llm, &pet, &[], &msg)
         }
         other => Err(format!("未知定时任务类型: {other}")),
+    }
+}
+
+fn weather_cities(params: &Map<String, Value>, fallback: &str) -> Vec<String> {
+    if let Some(Value::Array(arr)) = params.get("cities") {
+        let list: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !list.is_empty() {
+            return list;
+        }
+    }
+    let raw = param_str(params, "city")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| fallback.to_string());
+    let list: Vec<String> = raw
+        .split(|c: char| c == ',' || c == '，' || c == '/' || c == '、' || c == ';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if list.is_empty() {
+        vec![fallback.to_string()]
+    } else {
+        list
     }
 }
 
@@ -313,6 +407,11 @@ pub fn apply_host_action(
                     if at.is_empty() {
                         return "会议提醒需要 at（RFC3339 时间）".into();
                     }
+                    if chrono::DateTime::parse_from_rfc3339(&at).is_err() {
+                        return format!(
+                            "会议提醒 at 必须是 RFC3339（如 2026-08-06T20:00:00+08:00），收到的是「{at}」。每天定时推送请用 schedule.upsert"
+                        );
+                    }
                     let rule = crate::state::ReminderRule {
                         id: format!("rem-{}", Uuid::new_v4()),
                         r#type: "meeting".into(),
@@ -403,6 +502,9 @@ pub fn apply_host_action(
             } else {
                 if let Some(v) = args.get("city") {
                     params.insert("city".into(), v.clone());
+                }
+                if let Some(v) = args.get("cities") {
+                    params.insert("cities".into(), v.clone());
                 }
                 if let Some(v) = args.get("forTomorrow") {
                     params.insert("forTomorrow".into(), v.clone());

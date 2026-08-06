@@ -95,16 +95,23 @@ pub fn interact(app: AppHandle, action: String) -> Result<PetInstance, String> {
 #[tauri::command]
 pub fn switch_pet(app: AppHandle, pet_id: String) -> Result<PetInstance, String> {
     with_state(&app, |state| {
-        let target = state
+        let target_id = state
             .pets
             .iter()
-            .find(|p| p.id == pet_id)
+            .find(|p| p.id == pet_id || p.species_id == pet_id)
+            .map(|p| p.id.clone())
             .ok_or_else(|| "pet not found".to_string())?;
-        if !target.unlocked {
+        let unlocked = state
+            .pets
+            .iter()
+            .find(|p| p.id == target_id)
+            .map(|p| p.unlocked)
+            .unwrap_or(false);
+        if !unlocked {
             return Err("宠物未解锁".into());
         }
         for p in state.pets.iter_mut() {
-            p.is_active = p.id == pet_id;
+            p.is_active = p.id == target_id;
         }
         let pet = state
             .pets
@@ -121,25 +128,64 @@ pub fn switch_pet(app: AppHandle, pet_id: String) -> Result<PetInstance, String>
     })
 }
 
-fn normalize_personality(raw: &str) -> Result<&'static str, String> {
-    match raw.trim() {
-        "calm" => Ok("calm"),
-        "lively" => Ok("lively"),
-        "clingy" => Ok("clingy"),
-        "tsundere" => Ok("tsundere"),
-        "clever" => Ok("clever"),
-        other => Err(format!("未知性格类型: {other}")),
-    }
+fn is_preset_personality(raw: &str) -> bool {
+    matches!(
+        raw.trim(),
+        "calm" | "lively" | "clingy" | "tsundere" | "clever"
+    )
 }
 
-/// Change the active (or specified) pet's personality. Every unlocked pet can switch.
+fn normalize_personality_label(raw: &str) -> Result<String, String> {
+    let label = raw.trim();
+    if label.is_empty() {
+        return Err("性格标签不能为空".into());
+    }
+    if is_preset_personality(label) {
+        return Ok(label.to_string());
+    }
+    let chars: Vec<char> = label.chars().collect();
+    if chars.len() > 16 {
+        return Err("自定义性格标签最多 16 字".into());
+    }
+    // Reject control chars / path-looking junk
+    if label.chars().any(|c| c.is_control()) {
+        return Err("性格标签含非法字符".into());
+    }
+    Ok(label.to_string())
+}
+
+fn normalize_personality_note(note: Option<String>, is_preset: bool) -> Result<Option<String>, String> {
+    let Some(raw) = note else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let len = trimmed.chars().count();
+    if len > 200 {
+        return Err("性格描述最多 200 字".into());
+    }
+    if !is_preset && len < 4 {
+        return Err("自定义性格请写至少 4 字描述（语气、相处方式等）".into());
+    }
+    Ok(Some(trimmed))
+}
+
+/// Change the active (or specified) pet's personality. Presets or custom label+note.
 #[tauri::command]
 pub fn set_pet_personality(
     app: AppHandle,
     personality: String,
     pet_id: Option<String>,
+    note: Option<String>,
 ) -> Result<PetInstance, String> {
-    let personality = normalize_personality(&personality)?.to_string();
+    let personality = normalize_personality_label(&personality)?;
+    let is_preset = is_preset_personality(&personality);
+    let note = normalize_personality_note(note, is_preset)?;
+    if !is_preset && note.is_none() {
+        return Err("自定义性格需要填写描述".into());
+    }
     with_state(&app, |state| {
         let target_id = if let Some(id) = pet_id.filter(|s| !s.trim().is_empty()) {
             id
@@ -160,6 +206,8 @@ pub fn set_pet_personality(
             return Err("宠物尚未解锁".into());
         }
         pet.personality = personality;
+        // Preset without note clears override; custom always stores note.
+        pet.personality_note = if is_preset { note } else { note };
         let snapshot = pet.clone();
         let _ = app.emit("pet-updated", snapshot.clone());
         Ok(snapshot)

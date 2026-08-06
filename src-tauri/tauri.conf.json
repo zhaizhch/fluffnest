@@ -16,8 +16,8 @@
         "label": "pet",
         "title": "绒窝",
         "url": "index.html?window=pet",
-        "width": 260,
-        "height": 320,
+        "width": 340,
+        "height": 420,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -26,8 +26,8 @@
         "shadow": false,
         "visible": true,
         "center": false,
-        "x": 120,
-        "y": 120
+        "x": 80,
+        "y": 420
       },
       {
         "label": "panel",

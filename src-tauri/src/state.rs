@@ -13,6 +13,9 @@ pub struct PetInstance {
     pub energy: i32,
     pub bond: i32,
     pub personality: String,
+    /// Free-text personality description for LLM (optional; presets use built-in blurbs when empty).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personality_note: Option<String>,
     pub is_active: bool,
     #[serde(default)]
     pub unlocked: bool,
@@ -391,17 +394,37 @@ struct PetSeed {
     price: i32,
 }
 
-/// Mirrors frontend petCatalog.ts — single pet: 暖卡卡
+/// Mirrors frontend petCatalog.ts — 暖卡卡 + とろろ/ひじき(Live2D)
 fn catalog() -> Vec<PetSeed> {
-    vec![PetSeed {
-        id: "pet-kaka5",
-        species: "kaka5",
-        name: "暖卡卡",
-        personality: "clingy",
-        unlock: "default",
-        rarity: "R",
-        price: 0,
-    }]
+    vec![
+        PetSeed {
+            id: "pet-kaka5",
+            species: "kaka5",
+            name: "暖卡卡",
+            personality: "clingy",
+            unlock: "default",
+            rarity: "R",
+            price: 0,
+        },
+        PetSeed {
+            id: "pet-tororo",
+            species: "tororo",
+            name: "とろろ",
+            personality: "calm",
+            unlock: "default",
+            rarity: "SR",
+            price: 0,
+        },
+        PetSeed {
+            id: "pet-hijiki",
+            species: "hijiki",
+            name: "ひじき",
+            personality: "lively",
+            unlock: "default",
+            rarity: "SR",
+            price: 0,
+        },
+    ]
 }
 
 fn make_pet(seed: &PetSeed, active: bool, now: &str) -> PetInstance {
@@ -413,6 +436,7 @@ fn make_pet(seed: &PetSeed, active: bool, now: &str) -> PetInstance {
         energy: 72,
         bond: if seed.unlock == "default" { 20 } else { 0 },
         personality: seed.personality.into(),
+        personality_note: None,
         is_active: active,
         unlocked: seed.unlock == "default",
         last_interact_at: now.into(),
@@ -559,6 +583,7 @@ pub fn ensure_migrated(state: &mut AppState) {
         ("luzhishen", "kaizer"),
         ("likui", "guilmon"),
         ("yanqing", "rose"),
+        ("nuotuan", "tororo"),
     ];
 
     // Rebuild / merge pets from catalog
@@ -602,6 +627,10 @@ pub fn ensure_migrated(state: &mut AppState) {
             pet.bond = old.bond.max(pet.bond);
             pet.unlocked = old.unlocked || pet.unlocked || unlocked.contains(seed.species);
             pet.last_interact_at = old.last_interact_at.clone();
+            if !old.personality.trim().is_empty() {
+                pet.personality = old.personality.clone();
+            }
+            pet.personality_note = old.personality_note.clone();
             // Always refresh display name from catalog
             pet.name = seed.name.into();
         } else if unlocked.contains(seed.species) || seed.unlock == "default" {
@@ -628,14 +657,17 @@ pub fn ensure_migrated(state: &mut AppState) {
     }
     state.pets = next_pets;
 
-    // Single-pet build: always keep 暖卡卡 unlocked & active.
+    // Keep default pets unlocked; preserve whichever is active.
     for p in state.pets.iter_mut() {
-        if p.species_id == "kaka5" {
+        if p.species_id == "kaka5" || p.species_id == "tororo" || p.species_id == "hijiki" {
             p.unlocked = true;
+        }
+    }
+    if !state.pets.iter().any(|p| p.is_active && p.unlocked) {
+        if let Some(p) = state.pets.iter_mut().find(|p| p.species_id == "kaka5") {
             p.is_active = true;
-            p.name = "暖卡卡".into();
-        } else {
-            p.is_active = false;
+        } else if let Some(p) = state.pets.iter_mut().find(|p| p.unlocked) {
+            p.is_active = true;
         }
     }
 

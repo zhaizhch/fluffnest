@@ -6,7 +6,7 @@ export type PersonalityOption = {
   hint: string;
 };
 
-/** All switchable pet personalities. */
+/** Built-in switchable pet personalities. */
 export const PERSONALITIES: PersonalityOption[] = [
   { id: "calm", label: "安静型", hint: "温柔克制，话不多" },
   { id: "lively", label: "活泼型", hint: "开朗俏皮，爱闹腾" },
@@ -15,10 +15,32 @@ export const PERSONALITIES: PersonalityOption[] = [
   { id: "clever", label: "机灵型", hint: "机智吐槽，反应快" },
 ];
 
-export function personalityLabel(id: string | undefined | null): string {
-  return PERSONALITIES.find((p) => p.id === id)?.label ?? id ?? "未知";
-}
-
 export function isPersonality(id: string): id is Personality {
   return PERSONALITIES.some((p) => p.id === id);
+}
+
+/** Display label for presets or a custom tag. */
+export function personalityLabel(
+  id: string | undefined | null,
+  note?: string | null,
+): string {
+  if (!id) return "未知";
+  const preset = PERSONALITIES.find((p) => p.id === id);
+  if (preset) {
+    return note?.trim() ? `${preset.label}·定制` : preset.label;
+  }
+  return id;
+}
+
+export function personalityHint(
+  id: string | undefined | null,
+  note?: string | null,
+): string {
+  const n = note?.trim();
+  if (n) return n;
+  return PERSONALITIES.find((p) => p.id === id)?.hint ?? "自定义性格";
+}
+
+export function isCustomPersonality(id: string | undefined | null): boolean {
+  return !!id && !isPersonality(id);
 }

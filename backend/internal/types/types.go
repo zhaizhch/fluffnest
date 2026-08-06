@@ -2,16 +2,17 @@ package types
 
 // PetInstance mirrors Rust state.PetInstance (camelCase JSON).
 type PetInstance struct {
-	ID           string `json:"id"`
-	SpeciesID    string `json:"speciesId"`
-	Name         string `json:"name"`
-	Mood         int    `json:"mood"`
-	Energy       int    `json:"energy"`
-	Bond         int    `json:"bond"`
-	Personality  string `json:"personality"`
-	IsActive     bool   `json:"isActive"`
-	Unlocked     bool   `json:"unlocked"`
-	LastInteract string `json:"lastInteractAt"`
+	ID              string `json:"id"`
+	SpeciesID       string `json:"speciesId"`
+	Name            string `json:"name"`
+	Mood            int    `json:"mood"`
+	Energy          int    `json:"energy"`
+	Bond            int    `json:"bond"`
+	Personality     string `json:"personality"`
+	PersonalityNote string `json:"personalityNote,omitempty"`
+	IsActive        bool   `json:"isActive"`
+	Unlocked        bool   `json:"unlocked"`
+	LastInteract    string `json:"lastInteractAt"`
 }
 
 // LlmSettings mirrors Rust LLM config needed for outbound calls.
@@ -64,14 +65,18 @@ type CareVoiceRequest struct {
 
 // WeatherRequest is a raw weather summary lookup.
 type WeatherRequest struct {
-	City string `json:"city"`
+	City         string `json:"city"`
+	ForTomorrow  bool   `json:"forTomorrow,omitempty"`
+	DayOffset    int    `json:"dayOffset,omitempty"`
 }
 
 // WeatherBubbleRequest fetches weather then asks the model for a pet-style tip.
 type WeatherBubbleRequest struct {
-	LLM  LlmSettings `json:"llm"`
-	Pet  PetInstance `json:"pet"`
-	City string      `json:"city,omitempty"`
+	LLM         LlmSettings `json:"llm"`
+	Pet         PetInstance `json:"pet"`
+	City        string      `json:"city,omitempty"`
+	ForTomorrow bool        `json:"forTomorrow,omitempty"`
+	DayOffset   int         `json:"dayOffset,omitempty"`
 }
 
 // NewsRequest asks the sidecar to fetch realtime news via LLM tools and roast one item.

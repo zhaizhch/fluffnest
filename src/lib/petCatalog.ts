@@ -1,6 +1,6 @@
 import type { Personality } from "./types";
 
-/** Pet roster — currently only 暖卡卡. */
+/** Pet roster — 暖卡卡 (2D) + とろろ / ひじき (Live2D). */
 
 export type PetCategoryId =
   | "fluff"
@@ -15,11 +15,11 @@ export type PetDef = {
   name: string;
   category: PetCategoryId;
   personality: Personality;
-  /** Codex atlas path; omit when render is apng/svg */
+  /** Codex atlas path; omit when render is apng/svg/live2d */
   sprite?: string;
   spriteVersion?: number;
-  /** Default sprite atlas; apng = Rising KaKa original animations */
-  render?: "sprite" | "svg" | "apng";
+  /** Default sprite atlas; apng = Rising KaKa; live2d = Cubism */
+  render?: "sprite" | "svg" | "apng" | "live2d";
   vibe: string;
   /** default = unlocked at start */
   unlock: "default" | "shop" | "login";
@@ -31,7 +31,10 @@ export const PET_CATEGORIES: {
   id: PetCategoryId;
   label: string;
   blurb: string;
-}[] = [{ id: "star", label: "星光卡卡", blurb: "暖卡卡" }];
+}[] = [
+  { id: "star", label: "星光卡卡", blurb: "暖卡卡" },
+  { id: "fluff", label: "Live2D 猫", blurb: "とろろ & ひじき" },
+];
 
 export const PET_CATALOG: PetDef[] = [
   {
@@ -43,6 +46,26 @@ export const PET_CATALOG: PetDef[] = [
     vibe: "暖色卡卡 · 软萌跟班",
     unlock: "default",
     rarity: "R",
+  },
+  {
+    id: "tororo",
+    name: "とろろ",
+    category: "fluff",
+    personality: "calm",
+    render: "live2d",
+    vibe: "白猫 · Live2D 官方样例",
+    unlock: "default",
+    rarity: "SR",
+  },
+  {
+    id: "hijiki",
+    name: "ひじき",
+    category: "fluff",
+    personality: "lively",
+    render: "live2d",
+    vibe: "黑猫 · Live2D 官方样例",
+    unlock: "default",
+    rarity: "SR",
   },
 ];
 
@@ -90,7 +113,7 @@ export function spriteFor(speciesId: string): {
 
 export function usesCustomFigure(speciesId: string): boolean {
   const render = petDef(speciesId)?.render;
-  return render === "svg" || render === "apng";
+  return render === "svg" || render === "apng" || render === "live2d";
 }
 
 /** @deprecated use usesCustomFigure */

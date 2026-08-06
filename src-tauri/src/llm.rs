@@ -181,10 +181,21 @@ pub fn generate_weather_bubble(
     llm: &LlmSettings,
     pet: &PetInstance,
 ) -> Result<(String, String), String> {
+    generate_weather_bubble_ex(llm, pet, &llm.weather_city, false)
+}
+
+/// Weather bubble for a specific city; `for_tomorrow` requests next-day daily forecast.
+pub fn generate_weather_bubble_ex(
+    llm: &LlmSettings,
+    pet: &PetInstance,
+    city: &str,
+    for_tomorrow: bool,
+) -> Result<(String, String), String> {
     let body = json!({
         "llm": llm,
         "pet": pet,
-        "city": llm.weather_city,
+        "city": city,
+        "forTomorrow": for_tomorrow,
     });
     let resp: WeatherBubbleResponse = go_bridge::post_json("/v1/weather-bubble", &body)?;
     let summary = if resp.summary.trim().is_empty() {

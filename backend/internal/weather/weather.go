@@ -23,48 +23,68 @@ func New(httpClient *http.Client, c *cache.TTL) *Service {
 
 // Snapshot is structured weather for UI cards + LLM prompts.
 type Snapshot struct {
-	Label       string  `json:"label"`
-	Condition   string  `json:"condition"`
-	TempC       float64 `json:"tempC"`
-	FeelsC      float64 `json:"feelsC"`
-	TempMin     float64 `json:"tempMin"`
-	TempMax     float64 `json:"tempMax"`
-	Humidity    float64 `json:"humidity"`
-	Cloud       float64 `json:"cloud"`
-	WindKmh     float64 `json:"windKmh"`
-	WindGust    float64 `json:"windGust"`
-	WindDir     string  `json:"windDir"`
-	PrecipNow   float64 `json:"precipNow"`
-	PrecipDay   float64 `json:"precipDay"`
-	UV          float64 `json:"uv"`
-	UVLevel     string  `json:"uvLevel"`
-	Hints       string  `json:"hints"`
-	HasDaily    bool    `json:"-"`
-	HasUV       bool    `json:"-"`
-	HasPrecipDay bool   `json:"-"`
+	Label        string  `json:"label"`
+	Condition    string  `json:"condition"`
+	TempC        float64 `json:"tempC"`
+	FeelsC       float64 `json:"feelsC"`
+	TempMin      float64 `json:"tempMin"`
+	TempMax      float64 `json:"tempMax"`
+	Humidity     float64 `json:"humidity"`
+	Cloud        float64 `json:"cloud"`
+	WindKmh      float64 `json:"windKmh"`
+	WindGust     float64 `json:"windGust"`
+	WindDir      string  `json:"windDir"`
+	PrecipNow    float64 `json:"precipNow"`
+	PrecipDay    float64 `json:"precipDay"`
+	UV           float64 `json:"uv"`
+	UVLevel      string  `json:"uvLevel"`
+	Hints        string  `json:"hints"`
+	DayOffset    int     `json:"dayOffset"`
+	HasDaily     bool    `json:"-"`
+	HasUV        bool    `json:"-"`
+	HasPrecipDay bool    `json:"-"`
+	DailyOnly    bool    `json:"-"`
+}
+
+func dayWord(offset int) string {
+	switch offset {
+	case 0:
+		return "今日"
+	case 1:
+		return "明日"
+	default:
+		return fmt.Sprintf("%d天后", offset)
+	}
 }
 
 // CardText is human-readable numbers for the pet weather panel.
 func (s Snapshot) CardText() string {
 	var b strings.Builder
+	dw := dayWord(s.DayOffset)
 	fmt.Fprintf(&b, "%s\n", s.Label)
 	fmt.Fprintf(&b, "天气：%s\n", s.Condition)
-	fmt.Fprintf(&b, "气温：%.0f℃（体感 %.0f℃）", s.TempC, s.FeelsC)
-	if s.HasDaily {
-		fmt.Fprintf(&b, "，今日 %.0f~%.0f℃", s.TempMin, s.TempMax)
-	}
-	b.WriteByte('\n')
-	fmt.Fprintf(&b, "湿度：%.0f%%　云量：%.0f%%\n", s.Humidity, s.Cloud)
-	fmt.Fprintf(&b, "风速：%.0f km/h（%s）", s.WindKmh, s.WindDir)
-	if s.WindGust > 0 {
-		fmt.Fprintf(&b, "，阵风 %.0f km/h", s.WindGust)
-	}
-	b.WriteByte('\n')
-	if s.PrecipNow > 0 {
-		fmt.Fprintf(&b, "当前降水：%.1f mm\n", s.PrecipNow)
+	if s.DailyOnly {
+		if s.HasDaily {
+			fmt.Fprintf(&b, "%s气温：%.0f~%.0f℃\n", dw, s.TempMin, s.TempMax)
+		}
+	} else {
+		fmt.Fprintf(&b, "气温：%.0f℃（体感 %.0f℃）", s.TempC, s.FeelsC)
+		if s.HasDaily {
+			fmt.Fprintf(&b, "，%s %.0f~%.0f℃", dw, s.TempMin, s.TempMax)
+		}
+		b.WriteByte('\n')
+		fmt.Fprintf(&b, "湿度：%.0f%%　云量：%.0f%%\n", s.Humidity, s.Cloud)
+		fmt.Fprintf(&b, "风速：%.0f km/h（%s）", s.WindKmh, s.WindDir)
+		if s.WindGust > 0 {
+			fmt.Fprintf(&b, "，阵风 %.0f km/h", s.WindGust)
+		}
+		b.WriteByte('\n')
+		if s.PrecipNow > 0 {
+			fmt.Fprintf(&b, "当前降水：%.1f mm\n", s.PrecipNow)
+		}
 	}
 	if s.HasPrecipDay {
-		fmt.Fprintf(&b, "今日降水：%.1f mm\n", s.PrecipDay)
+		fmt.Fprintf(&b, "%s降水：%.1f mm\n", dw, s.PrecipDay)
 	}
 	if s.HasUV {
 		fmt.Fprintf(&b, "紫外线：UV %.1f（%s）\n", s.UV, s.UVLevel)
@@ -182,20 +202,46 @@ func uvLevelZH(uv float64) string {
 }
 
 func (s *Service) Summary(ctx context.Context, city string) (string, error) {
-	snap, err := s.Fetch(ctx, city)
+	return s.SummaryDay(ctx, city, 0)
+}
+
+func (s *Service) SummaryDay(ctx context.Context, city string, dayOffset int) (string, error) {
+	snap, err := s.FetchDay(ctx, city, dayOffset)
 	if err != nil {
 		return "", err
 	}
 	return snap.PromptText(), nil
 }
 
-// Fetch returns a structured weather snapshot (cached ~15 min).
+// DayOffset resolves forTomorrow / explicit dayOffset into 0=today, 1=tomorrow, …
+func DayOffset(forTomorrow bool, dayOffset int) int {
+	if dayOffset > 0 {
+		return dayOffset
+	}
+	if forTomorrow {
+		return 1
+	}
+	return 0
+}
+
+// Fetch returns a structured weather snapshot for today (cached ~15 min).
 func (s *Service) Fetch(ctx context.Context, city string) (Snapshot, error) {
+	return s.FetchDay(ctx, city, 0)
+}
+
+// FetchDay returns weather for today (offset 0) or a future daily forecast (offset ≥ 1).
+func (s *Service) FetchDay(ctx context.Context, city string, dayOffset int) (Snapshot, error) {
 	city = strings.TrimSpace(city)
 	if city == "" {
 		city = "北京"
 	}
-	cacheKey := "weather:snap:v1:" + city
+	if dayOffset < 0 {
+		dayOffset = 0
+	}
+	if dayOffset > 7 {
+		dayOffset = 7
+	}
+	cacheKey := fmt.Sprintf("weather:snap:v2:%s:d%d", city, dayOffset)
 	if v, ok := s.cache.Get(cacheKey); ok {
 		var snap Snapshot
 		if json.Unmarshal([]byte(v), &snap) == nil && snap.Label != "" {
@@ -225,12 +271,13 @@ func (s *Service) Fetch(ctx context.Context, city string) (Snapshot, error) {
 	}
 	hit := geo.Results[0]
 
+	days := dayOffset + 1
 	forecastURL := fmt.Sprintf(
 		"https://api.open-meteo.com/v1/forecast?latitude=%f&longitude=%f"+
 			"&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,cloud_cover,precipitation,wind_speed_10m,wind_gusts_10m,wind_direction_10m"+
 			"&daily=weather_code,temperature_2m_max,temperature_2m_min,uv_index_max,precipitation_sum"+
-			"&timezone=auto&forecast_days=1",
-		hit.Latitude, hit.Longitude,
+			"&timezone=auto&forecast_days=%d",
+		hit.Latitude, hit.Longitude, days,
 	)
 	req2, err := http.NewRequestWithContext(ctx, http.MethodGet, forecastURL, nil)
 	if err != nil {
@@ -245,10 +292,6 @@ func (s *Service) Fetch(ctx context.Context, city string) (Snapshot, error) {
 	if err := json.NewDecoder(resp2.Body).Decode(&fc); err != nil {
 		return Snapshot{}, fmt.Errorf("天气解析失败: %w", err)
 	}
-	if fc.Current == nil {
-		return Snapshot{}, fmt.Errorf("无当前天气")
-	}
-	cur := fc.Current
 
 	label := hit.Name
 	if label == "" {
@@ -261,42 +304,79 @@ func (s *Service) Fetch(ctx context.Context, city string) (Snapshot, error) {
 		label = label + "（" + hit.Country + "）"
 	}
 
-	cond := weatherCodeZH(cur.WeatherCode)
-	if fc.Daily != nil && len(fc.Daily.WeatherCode) > 0 {
-		dayCond := weatherCodeZH(fc.Daily.WeatherCode[0])
-		if dayCond != cond {
-			cond = cond + "（今日整体偏" + dayCond + "）"
+	if dayOffset == 0 {
+		if fc.Current == nil {
+			return Snapshot{}, fmt.Errorf("无当前天气")
 		}
+		cur := fc.Current
+		cond := weatherCodeZH(cur.WeatherCode)
+		if fc.Daily != nil && len(fc.Daily.WeatherCode) > 0 {
+			dayCond := weatherCodeZH(fc.Daily.WeatherCode[0])
+			if dayCond != cond {
+				cond = cond + "（今日整体偏" + dayCond + "）"
+			}
+		}
+		snap := Snapshot{
+			Label:     label,
+			Condition: cond,
+			TempC:     cur.Temperature2m,
+			FeelsC:    cur.ApparentTemp,
+			Humidity:  cur.RelativeHumidity2m,
+			Cloud:     cur.CloudCover,
+			WindKmh:   cur.WindSpeed10m,
+			WindGust:  cur.WindGusts10m,
+			WindDir:   windDirZH(cur.WindDirection10m),
+			PrecipNow: cur.Precipitation,
+			DayOffset: 0,
+		}
+		if fc.Daily != nil && len(fc.Daily.Temperature2mMin) > 0 && len(fc.Daily.Temperature2mMax) > 0 {
+			snap.HasDaily = true
+			snap.TempMin = fc.Daily.Temperature2mMin[0]
+			snap.TempMax = fc.Daily.Temperature2mMax[0]
+		}
+		if fc.Daily != nil && len(fc.Daily.PrecipitationSum) > 0 {
+			snap.HasPrecipDay = true
+			snap.PrecipDay = fc.Daily.PrecipitationSum[0]
+		}
+		if fc.Daily != nil && len(fc.Daily.UvIndexMax) > 0 {
+			snap.HasUV = true
+			snap.UV = fc.Daily.UvIndexMax[0]
+			snap.UVLevel = uvLevelZH(snap.UV)
+		}
+		snap.Hints = protectionHints(cur.WeatherCode, snap.TempC, snap.FeelsC, snap.WindKmh, snap.UV, snap.PrecipNow, snap.PrecipDay)
+		if b, err := json.Marshal(snap); err == nil {
+			s.cache.Set(cacheKey, string(b), 15*time.Minute)
+		}
+		return snap, nil
 	}
 
+	if fc.Daily == nil || dayOffset >= len(fc.Daily.WeatherCode) {
+		return Snapshot{}, fmt.Errorf("无%s预报", dayWord(dayOffset))
+	}
+	code := fc.Daily.WeatherCode[dayOffset]
 	snap := Snapshot{
 		Label:     label,
-		Condition: cond,
-		TempC:     cur.Temperature2m,
-		FeelsC:    cur.ApparentTemp,
-		Humidity:  cur.RelativeHumidity2m,
-		Cloud:     cur.CloudCover,
-		WindKmh:   cur.WindSpeed10m,
-		WindGust:  cur.WindGusts10m,
-		WindDir:   windDirZH(cur.WindDirection10m),
-		PrecipNow: cur.Precipitation,
+		Condition: weatherCodeZH(code),
+		DayOffset: dayOffset,
+		DailyOnly: true,
+		HasDaily:  true,
 	}
-	if fc.Daily != nil && len(fc.Daily.Temperature2mMin) > 0 && len(fc.Daily.Temperature2mMax) > 0 {
-		snap.HasDaily = true
-		snap.TempMin = fc.Daily.Temperature2mMin[0]
-		snap.TempMax = fc.Daily.Temperature2mMax[0]
+	if dayOffset < len(fc.Daily.Temperature2mMin) && dayOffset < len(fc.Daily.Temperature2mMax) {
+		snap.TempMin = fc.Daily.Temperature2mMin[dayOffset]
+		snap.TempMax = fc.Daily.Temperature2mMax[dayOffset]
+		snap.TempC = (snap.TempMin + snap.TempMax) / 2
+		snap.FeelsC = snap.TempC
 	}
-	if fc.Daily != nil && len(fc.Daily.PrecipitationSum) > 0 {
+	if dayOffset < len(fc.Daily.PrecipitationSum) {
 		snap.HasPrecipDay = true
-		snap.PrecipDay = fc.Daily.PrecipitationSum[0]
+		snap.PrecipDay = fc.Daily.PrecipitationSum[dayOffset]
 	}
-	if fc.Daily != nil && len(fc.Daily.UvIndexMax) > 0 {
+	if dayOffset < len(fc.Daily.UvIndexMax) {
 		snap.HasUV = true
-		snap.UV = fc.Daily.UvIndexMax[0]
+		snap.UV = fc.Daily.UvIndexMax[dayOffset]
 		snap.UVLevel = uvLevelZH(snap.UV)
 	}
-	snap.Hints = protectionHints(cur.WeatherCode, snap.TempC, snap.FeelsC, snap.WindKmh, snap.UV, snap.PrecipNow, snap.PrecipDay)
-
+	snap.Hints = protectionHints(code, snap.TempC, snap.FeelsC, 0, snap.UV, 0, snap.PrecipDay)
 	if b, err := json.Marshal(snap); err == nil {
 		s.cache.Set(cacheKey, string(b), 15*time.Minute)
 	}

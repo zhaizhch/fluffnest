@@ -23,8 +23,16 @@ func personalityBlurb(p string) string {
 	case "clever":
 		return "性格机灵：反应快、爱俏皮吐槽和机智提醒；聪明但不摆架子，像会说俏皮话的小参谋。"
 	default:
-		return "性格温和，像一只软软的桌面小伙伴。"
+		return "性格鲜明，请严格按主人给出的性格描述说话。"
 	}
+}
+
+// EffectivePersonalityBlurb prefers a custom note when present.
+func EffectivePersonalityBlurb(pet types.PetInstance) string {
+	if n := strings.TrimSpace(pet.PersonalityNote); n != "" {
+		return n
+	}
+	return personalityBlurb(pet.Personality)
 }
 
 func BondLabel(bond int) string {
@@ -57,7 +65,7 @@ func SystemPrompt(pet types.PetInstance) string {
 			"5. 禁止深度思考、推理过程、分析步骤；不要输出 <think> 等内容，立刻直接给出最终台词。\n"+
 			"6. 不讨论政治敏感与成人内容；新闻吐槽保持轻松无害。\n"+
 			"7. 今日运势是轻松娱乐向，可温暖鼓励，不要吓人、不要宿命论恐吓。",
-		pet.Name, pet.Personality, personalityBlurb(pet.Personality),
+		pet.Name, pet.Personality, EffectivePersonalityBlurb(pet),
 		BondLabel(pet.Bond), pet.Bond, pet.Mood,
 	)
 }
@@ -83,19 +91,23 @@ func (c *Client) GenerateBubble(ctx context.Context, llm types.LlmSettings, pet 
 		task = fmt.Sprintf("你正在边跳舞边提醒主人「%s」。请用「%s」性格说一句很口语、适合朗读的提醒（不超过 26 字）。可撒娇/俏皮/温柔，不要像播报。只输出这一句。", action, pet.Personality)
 	case "weather":
 		var style string
-		switch pet.Personality {
-		case "lively":
-			style = "活泼俏皮，可带轻快语气词，像分享出门小攻略"
-		case "clingy":
-			style = "软软撒娇叮嘱，像黏着主人催着穿好衣服"
-		case "calm":
-			style = "温柔克制，像轻声递上一条实用提醒"
-		case "tsundere":
-			style = "嘴硬心软，别扭地提醒主人注意天气，别太直白温柔"
-		case "clever":
-			style = "机灵俏皮，用聪明小建议把防护说清楚"
-		default:
-			style = "温和口语，像桌面小伙伴关心主人"
+		if n := strings.TrimSpace(pet.PersonalityNote); n != "" {
+			style = n
+		} else {
+			switch pet.Personality {
+			case "lively":
+				style = "活泼俏皮，可带轻快语气词，像分享出门小攻略"
+			case "clingy":
+				style = "软软撒娇叮嘱，像黏着主人催着穿好衣服"
+			case "calm":
+				style = "温柔克制，像轻声递上一条实用提醒"
+			case "tsundere":
+				style = "嘴硬心软，别扭地提醒主人注意天气，别太直白温柔"
+			case "clever":
+				style = "机灵俏皮，用聪明小建议把防护说清楚"
+			default:
+				style = "温和口语，像桌面小伙伴关心主人"
+			}
 		}
 		task = fmt.Sprintf(
 			"下面是实时天气（含数字与防护素材）。用「%s」性格（%s）对主人说一段出门关心话。\n"+
@@ -181,19 +193,23 @@ func (c *Client) GenerateFortune(ctx context.Context, llm types.LlmSettings, pet
 		weatherLine = "参考天气：" + *weather
 	}
 	var style string
-	switch pet.Personality {
-	case "lively":
-		style = "活泼俏皮，像分享小八卦一样讲运势，可带轻快语气词"
-	case "clingy":
-		style = "软软撒娇，像黏着主人叮嘱今天要注意什么"
-	case "calm":
-		style = "温柔克制，像轻轻递上一杯茶时说的话"
-	case "tsundere":
-		style = "傲娇口吻：嘴上说才不是特意关心，但运势叮嘱很到位"
-	case "clever":
-		style = "机灵参谋风：把运势讲清楚，再丢一句俏皮点评"
-	default:
-		style = "温和口语，像桌面小伙伴陪主人看运势"
+	if n := strings.TrimSpace(pet.PersonalityNote); n != "" {
+		style = n
+	} else {
+		switch pet.Personality {
+		case "lively":
+			style = "活泼俏皮，像分享小八卦一样讲运势，可带轻快语气词"
+		case "clingy":
+			style = "软软撒娇，像黏着主人叮嘱今天要注意什么"
+		case "calm":
+			style = "温柔克制，像轻轻递上一杯茶时说的话"
+		case "tsundere":
+			style = "傲娇口吻：嘴上说才不是特意关心，但运势叮嘱很到位"
+		case "clever":
+			style = "机灵参谋风：把运势讲清楚，再丢一句俏皮点评"
+		default:
+			style = "温和口语，像桌面小伙伴陪主人看运势"
+		}
 	}
 	system := SystemPrompt(pet) + "\n补充（仅本任务）：允许分节与换行输出运势卡片正文；不要 markdown 的 # 标题或代码块。"
 	user := fmt.Sprintf(
@@ -238,19 +254,23 @@ func (c *Client) GenerateCareVoice(ctx context.Context, llm types.LlmSettings, p
 		topic = "久坐太久，起来活动 / 伸懒腰 / 走动"
 	}
 	var style string
-	switch pet.Personality {
-	case "lively":
-		style = "活泼跳脱，爱用轻快语气词，像边跳边喊主人"
-	case "clingy":
-		style = "黏人撒娇，软软的，求关注式提醒"
-	case "calm":
-		style = "温柔克制，轻声提醒，不催促"
-	case "tsundere":
-		style = "傲娇提醒：别扭、嘴硬，但内容是真心催主人喝水/活动"
-	case "clever":
-		style = "机灵俏皮，用聪明比喻提醒，不啰嗦"
-	default:
-		style = "温和口语"
+	if n := strings.TrimSpace(pet.PersonalityNote); n != "" {
+		style = n
+	} else {
+		switch pet.Personality {
+		case "lively":
+			style = "活泼跳脱，爱用轻快语气词，像边跳边喊主人"
+		case "clingy":
+			style = "黏人撒娇，软软的，求关注式提醒"
+		case "calm":
+			style = "温柔克制，轻声提醒，不催促"
+		case "tsundere":
+			style = "傲娇提醒：别扭、嘴硬，但内容是真心催主人喝水/活动"
+		case "clever":
+			style = "机灵俏皮，用聪明比喻提醒，不啰嗦"
+		default:
+			style = "温和口语"
+		}
 	}
 	avoidBlock := ""
 	if len(avoid) > 0 {
@@ -376,7 +396,7 @@ func (c *Client) GenerateImTriage(ctx context.Context, llm types.LlmSettings, pe
 			`- "urgency": "urgent"|"normal"|"noise"（广告/群刷屏/无意义→noise；开会/截止/紧急求助→urgent；其余 normal）`+"\n"+
 			`- "summary": 不超过 40 字的摘要`+"\n"+
 			`- "react": 用「%s」性格说一句桌宠反应（不超过 30 字）`+"\n"+
-			`- "reminder": 可选；若内容含明确时间待办/会议，给 {"title":"...","at":"RFC3339 或省略","intervalMinutes":数字或省略}，否则省略该字段`+"\n"+
+			`- "reminder": 可选；仅当内容是「一次」待办/会议时填写 {"title":"...","at":"必须是 RFC3339 完整时间","intervalMinutes":数字或省略}；每天/每晚/定时推送天气或资讯等不要写 reminder（由 schedule 工具处理），无明确时间也省略`+"\n"+
 			"（直接输出 JSON，不要思考过程）",
 		sender, text, pet.Personality,
 	)

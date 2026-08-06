@@ -26,6 +26,22 @@ struct DedupKey {
 
 static DEDUP: Mutex<VecDeque<DedupKey>> = Mutex::new(VecDeque::new());
 
+/// IM triage sometimes invents a "reminder" for daily weather/news pushes.
+/// Those belong in `schedules`, and meeting `at` must be RFC3339 or the poller never fires.
+fn reminder_hint_is_usable(r: &llm::ImReminderHint) -> bool {
+    let title = r.title.to_lowercase();
+    let schedule_like = ["天气", "预报", "简报", "资讯", "新闻", "weather", "forecast", "news"]
+        .iter()
+        .any(|k| title.contains(k));
+    if schedule_like {
+        return false;
+    }
+    match &r.at {
+        None => true,
+        Some(at) => DateTime::parse_from_rfc3339(at).is_ok(),
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImIngestRequest {
@@ -171,7 +187,7 @@ pub fn ingest_message(app: &AppHandle, req: ImIngestRequest) -> Result<Option<Im
                     react = t.react;
                 }
                 if let Some(r) = t.reminder {
-                    if !r.title.is_empty() {
+                    if !r.title.is_empty() && reminder_hint_is_usable(&r) {
                         reminder_hint = Some((r.title, r.at, r.interval_minutes));
                     }
                 }

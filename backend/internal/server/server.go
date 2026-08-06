@@ -162,7 +162,7 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	text, err := s.weather.Summary(r.Context(), req.City)
+	text, err := s.weather.SummaryDay(r.Context(), req.City, weather.DayOffset(req.ForTomorrow, req.DayOffset))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -180,7 +180,7 @@ func (s *Server) handleWeatherBubble(w http.ResponseWriter, r *http.Request) {
 	if city == "" {
 		city = req.LLM.City
 	}
-	snap, err := s.weather.Fetch(r.Context(), city)
+	snap, err := s.weather.FetchDay(r.Context(), city, weather.DayOffset(req.ForTomorrow, req.DayOffset))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -201,7 +201,7 @@ func (s *Server) handleWeatherTip(w http.ResponseWriter, r *http.Request) {
 	if city == "" {
 		city = req.LLM.City
 	}
-	snap, err := s.weather.Fetch(r.Context(), city)
+	snap, err := s.weather.FetchDay(r.Context(), city, weather.DayOffset(req.ForTomorrow, req.DayOffset))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

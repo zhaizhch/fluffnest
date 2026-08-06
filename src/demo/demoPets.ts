@@ -8,7 +8,7 @@ export type DemoPet = {
   vibe: string;
 };
 
-/** Browser try-on — 暖卡卡 only. */
+/** Browser try-on — 暖卡卡 + Live2D cats. */
 export const DEMO_PETS: DemoPet[] = [
   {
     id: "kaka5",
@@ -16,6 +16,20 @@ export const DEMO_PETS: DemoPet[] = [
     personality: "clingy",
     pack: "kaka-5",
     vibe: "暖色卡卡 · 软萌跟班",
+  },
+  {
+    id: "tororo",
+    name: "とろろ",
+    personality: "calm",
+    pack: "tororo",
+    vibe: "白猫 · Live2D",
+  },
+  {
+    id: "hijiki",
+    name: "ひじき",
+    personality: "lively",
+    pack: "hijiki",
+    vibe: "黑猫 · Live2D",
   },
 ];
 

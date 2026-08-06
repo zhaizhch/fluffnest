@@ -30,10 +30,15 @@ export const api = {
   interact: (action: InteractAction) =>
     invoke<PetInstance>("interact", { action }),
   switchPet: (petId: string) => invoke<PetInstance>("switch_pet", { petId }),
-  setPetPersonality: (personality: string, petId?: string | null) =>
+  setPetPersonality: (
+    personality: string,
+    petId?: string | null,
+    note?: string | null,
+  ) =>
     invoke<PetInstance>("set_pet_personality", {
       personality,
       petId: petId ?? null,
+      note: note ?? null,
     }),
   updateSettings: (settings: Settings) =>
     invoke<Settings>("update_settings", { settings }),

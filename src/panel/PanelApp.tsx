@@ -14,7 +14,7 @@ import {
   petDef,
   type PetCategoryId,
 } from "../lib/petCatalog";
-import { PERSONALITIES, personalityLabel } from "../lib/personality";
+import { PERSONALITIES, isPersonality, personalityHint, personalityLabel } from "../lib/personality";
 import type {
   AppState,
   ImDraftResult,
@@ -62,6 +62,10 @@ export function PanelApp() {
   const [draftTarget, setDraftTarget] = useState<ImDraftResult | null>(null);
   const [draftText, setDraftText] = useState("");
   const [draftBusy, setDraftBusy] = useState(false);
+  const [customLabel, setCustomLabel] = useState("");
+  const [customNote, setCustomNote] = useState("");
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
   const wxPollRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -169,6 +173,19 @@ export function PanelApp() {
     [state],
   );
 
+  useEffect(() => {
+    if (!active) return;
+    if (isPersonality(active.personality)) {
+      setCustomLabel("");
+      setCustomNote(active.personalityNote?.trim() ? active.personalityNote : "");
+      setCustomOpen(!!active.personalityNote?.trim());
+    } else {
+      setCustomLabel(active.personality);
+      setCustomNote(active.personalityNote ?? "");
+      setCustomOpen(true);
+    }
+  }, [active?.id, active?.personality, active?.personalityNote]);
+
   const bondProgress = useMemo(
     () => (active ? nextTierProgress(active.bond) : null),
     [active],
@@ -246,7 +263,18 @@ export function PanelApp() {
                   <span className="badge bond">
                     {bondProgress?.label ?? `亲密度 ${active.bond}`}
                   </span>
-                  <span className="badge">{personalityLabel(active.personality)}</span>
+                  <span
+                    className="badge"
+                    title={personalityHint(
+                      active.personality,
+                      active.personalityNote,
+                    )}
+                  >
+                    {personalityLabel(
+                      active.personality,
+                      active.personalityNote,
+                    )}
+                  </span>
                 </p>
                 {bondProgress && (
                   <div className="bond-track" title="亲密度档位进度">
@@ -298,19 +326,27 @@ export function PanelApp() {
               </button>
             </div>
 
-            <h3>性格切换</h3>
-            <p className="hint">每只宠物都可切换；对话、天气叮嘱、提醒语音都会跟着变。</p>
+            <h3>性格</h3>
+            <p className="hint">
+              可选预设，或自定义标签+描述；对话、天气叮嘱、提醒语音都会跟着变。
+            </p>
             <div className="pet-switch personality-switch">
               {PERSONALITIES.map((p) => (
                 <button
                   key={p.id}
                   type="button"
                   title={p.hint}
-                  className={active.personality === p.id ? "active-chip" : ""}
+                  className={
+                    active.personality === p.id && !active.personalityNote?.trim()
+                      ? "active-chip"
+                      : active.personality === p.id
+                        ? "active-chip soft"
+                        : ""
+                  }
                   onClick={async () => {
-                    if (active.personality === p.id) return;
                     try {
-                      await api.setPetPersonality(p.id, active.id);
+                      await api.setPetPersonality(p.id, active.id, null);
+                      setCustomOpen(false);
                       await refresh();
                       toast(`已切换为${p.label}`);
                     } catch (e) {
@@ -321,7 +357,92 @@ export function PanelApp() {
                   {p.label}
                 </button>
               ))}
+              <button
+                type="button"
+                title="自己写性格标签和描述"
+                className={
+                  customOpen || !isPersonality(active.personality)
+                    ? "active-chip"
+                    : ""
+                }
+                onClick={() => {
+                  setCustomOpen(true);
+                  if (isPersonality(active.personality) && !customLabel) {
+                    setCustomLabel("我的设定");
+                  }
+                  if (!customNote.trim() && isPersonality(active.personality)) {
+                    setCustomNote(personalityHint(active.personality));
+                  }
+                }}
+              >
+                自定义…
+              </button>
             </div>
+            {customOpen && (
+              <div className="personality-custom">
+                <label>
+                  标签
+                  <input
+                    value={customLabel}
+                    maxLength={16}
+                    placeholder="例如：社恐宅 / 毒舌顾问"
+                    onChange={(e) => setCustomLabel(e.target.value)}
+                  />
+                </label>
+                <label>
+                  描述
+                  <textarea
+                    value={customNote}
+                    maxLength={200}
+                    rows={3}
+                    placeholder="用几句话写清语气、相处方式、口头禅…"
+                    onChange={(e) => setCustomNote(e.target.value)}
+                  />
+                </label>
+                <div className="row wrap">
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={customBusy}
+                    onClick={async () => {
+                      const label = customLabel.trim();
+                      const note = customNote.trim();
+                      if (!label) {
+                        toast("请填写性格标签");
+                        return;
+                      }
+                      if (note.length < 4) {
+                        toast("描述至少 4 个字");
+                        return;
+                      }
+                      setCustomBusy(true);
+                      try {
+                        await api.setPetPersonality(label, active.id, note);
+                        await refresh();
+                        toast(`已保存「${label}」性格`);
+                      } catch (e) {
+                        toast(String(e));
+                      } finally {
+                        setCustomBusy(false);
+                      }
+                    }}
+                  >
+                    {customBusy ? "保存中…" : "保存自定义性格"}
+                  </button>
+                  {isPersonality(active.personality) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCustomOpen(false);
+                        setCustomNote("");
+                      }}
+                    >
+                      收起
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
             <p className="hint">
               点击宠物或下方按钮互动；开启 AI 后台词会按性格生成。今日好感最多 +

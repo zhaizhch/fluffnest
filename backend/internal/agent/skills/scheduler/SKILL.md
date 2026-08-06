@@ -23,10 +23,13 @@ Channel 默认 `wechat`（也可 `pet` 仅桌面气泡）。
 Examples:
 1. 「每天晚上八点把明天天气发到微信」
    → `schedule_upsert` kind=`weather_forecast` hour=20 minute=0 channel=`wechat` forTomorrow=true title=`晚间天气预报`
-2. 「每天早上九点发过去24小时资讯简报」
+   （禁止用 `reminder_set` / meeting；口头答应不算生效，必须调用本工具）
+2. 「每天晚上八点把北京、天津、南皮明天天气发到微信」
+   → `schedule_upsert` kind=`weather_forecast` hour=20 city=`北京,天津,南皮` forTomorrow=true
+3. 「每天早上九点发过去24小时资讯简报」
    → `schedule_upsert` kind=`news_brief` hour=9 minute=0 lookbackHours=24 title=`早间资讯简报`
-3. 取消：`schedule_cancel` query=`天气` 或 id
-4. 查看：`schedule_list`
+4. 取消：`schedule_cancel` query=`天气` 或 id
+5. 查看：`schedule_list`
 
 ## Cycle
 1. 先 `reminder_list` / `schedule_list` 若用户在询问状态。

@@ -62,6 +62,8 @@ export type PetInstance = {
   energy: number;
   bond: number;
   personality: Personality | string;
+  /** Free-text blurb for LLM; overrides preset description when set. */
+  personalityNote?: string | null;
   isActive: boolean;
   unlocked: boolean;
   lastInteractAt: string;

@@ -112,7 +112,7 @@ func toolSpecs() []llm.ToolSpec {
 			"type":       "object",
 			"properties": map[string]any{},
 		}),
-		fnTool("schedule_upsert", "创建或更新定时推送。例：每天 20:00 发明日天气到微信；每天 09:00 发过去 24h 资讯简报。", map[string]any{
+		fnTool("schedule_upsert", "创建或更新定时推送。例：每天 20:00 发明日天气到微信；每天 09:00 发过去 24h 资讯简报。用户说「每天/每晚把天气发到微信」必须用本工具，不要用 reminder_set。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"id":             map[string]any{"type": "string"},
@@ -121,7 +121,8 @@ func toolSpecs() []llm.ToolSpec {
 				"channel":        map[string]any{"type": "string", "description": "wechat|pet，默认 wechat"},
 				"hour":           map[string]any{"type": "integer", "description": "本地小时 0-23"},
 				"minute":         map[string]any{"type": "integer", "description": "本地分钟 0-59"},
-				"city":           map[string]any{"type": "string"},
+				"city":           map[string]any{"type": "string", "description": "城市，多个用逗号分隔，如 北京,天津,南皮"},
+				"cities":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "多城市数组，优先于 city"},
 				"forTomorrow":    map[string]any{"type": "boolean"},
 				"lookbackHours":  map[string]any{"type": "integer"},
 				"prompt":         map[string]any{"type": "string", "description": "custom_prompt 说明"},

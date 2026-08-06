@@ -1,0 +1,11 @@
+{
+  "id": "hijiki",
+  "displayName": "ひじき",
+  "description": "Live2D 官方免费样例黑猫。腕切り替えで耳かき・手なめなどの仕草あり。",
+  "render": "live2d",
+  "engine": "untitled-pixi-live2d-engine + pixi.js",
+  "model": "runtime/hijiki.model3.json",
+  "modelSource": "https://www.live2d.com/en/learn/sample/tororo-hijiki/",
+  "library": "https://github.com/Untitled-Story/untitled-pixi-live2d-engine",
+  "license": "Live2D Free Material License"
+}

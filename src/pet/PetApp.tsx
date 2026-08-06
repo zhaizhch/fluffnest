@@ -49,7 +49,7 @@ import { PetFigure } from "./PetFigure";
 import { QuickMenu, type QuickRemindKind } from "./QuickMenu";
 import "./pet.css";
 
-const PET_SIZE = { w: 260, h: 320 };
+const PET_SIZE = { w: 340, h: 420 };
 const MENU_SIZE = { w: 520, h: 400 };
 const FORTUNE_SIZE = { w: 540, h: 460 };
 const WEATHER_SIZE = { w: 540, h: 440 };
@@ -1547,6 +1547,13 @@ export function PetApp() {
               behavior={visual}
               facing={facing}
               risingAction={species === "rising" ? risingAction : null}
+              onTap={() => {
+                if (careAlertRef.current) {
+                  dismissCareAlert();
+                  return;
+                }
+                void onClick();
+              }}
             />
           </div>
         </div>
