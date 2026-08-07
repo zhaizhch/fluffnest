@@ -58,9 +58,27 @@ func (m *Memory) EssentialsForPrompt(peerID string) string {
 }
 
 // WorkingMemoryForPrompt is the always-on conversational continuity block:
-// open thread + episodic digest + recent session notes + query-relevant recalls.
-// This is what prevents “前后聊不起来” when chat history is compressed.
+// open thread + episodic digest + recent session notes + query-relevant recalls + recent journal.
 func (m *Memory) WorkingMemoryForPrompt(peerID, userMessage string) string {
+	core := m.workingMemoryCore(peerID, userMessage)
+	jb := m.JournalBriefForPrompt(peerID)
+	if core == "" && jb == "" {
+		return ""
+	}
+	if jb == "" {
+		return core
+	}
+	if core == "" {
+		return "## Working Memory（本轮必读，用于衔接前后对话）\n" + jb
+	}
+	out := core + "\n" + jb
+	if utf8.RuneCountInString(out) > workingMemoryRunes {
+		out = truncateRunes(out, workingMemoryRunes)
+	}
+	return out
+}
+
+func (m *Memory) workingMemoryCore(peerID, userMessage string) string {
 	if m == nil {
 		return ""
 	}
@@ -221,7 +239,8 @@ func TruncateToolResult(name, content string) string {
 	case "web_search", "get_news":
 		limit = 1800
 	case "multi_agent_run", "agent_board_read", "agent_board_post",
-		"agent_chat", "agent_send", "agent_broadcast", "team_status":
+		"agent_chat", "agent_send", "agent_broadcast", "team_status",
+		"journal_list", "journal_search", "journal_write":
 		limit = 3200
 	}
 	if utf8.RuneCountInString(content) <= limit {

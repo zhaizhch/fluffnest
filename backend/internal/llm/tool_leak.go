@@ -145,7 +145,7 @@ func StripToolLeak(raw string) string {
 }
 
 // LooksIncompleteReply catches mid-thought stalls that should not be sent to WeChat
-// (e.g. "主人别急，卡卡这就" — predicate never finished).
+// (e.g. "主人别急，卡卡这就" — predicate never finished; or cut mid-quote).
 func LooksIncompleteReply(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -158,7 +158,9 @@ func LooksIncompleteReply(s string) bool {
 	r := []rune(s)
 	last := r[len(r)-1]
 	switch last {
-	case '，', '、', ',', ';', '；', '：', ':':
+	case '，', '、', ',', ';', '；', '：', ':',
+		'"', '\'', '“', '‘', '「', '『', '(', '（', '[', '【',
+		'—', '–', '-', '/', '\\':
 		return true
 	}
 
@@ -166,9 +168,21 @@ func LooksIncompleteReply(s string) bool {
 	for _, suf := range []string{
 		"这就", "这就去", "这就来", "正在", "马上", "稍等", "别急",
 		"我去", "让我", "我来", "先去", "先查", "去查", "去搜",
-		"卡卡这就", "主人别急",
+		"卡卡这就", "主人别急", "就是他的", "就是她的", "就是它的",
 	} {
 		if strings.HasSuffix(s, suf) {
+			return true
+		}
+	}
+
+	if unbalancedQuotes(s) {
+		return true
+	}
+
+	// Complete sentence(s) then an unfinished trailing clause (common max_tokens cut).
+	if i := lastStrongSentenceIndex(r); i >= 0 && i < len(r)-1 {
+		tail := strings.TrimSpace(string(r[i+1:]))
+		if utf8.RuneCountInString(tail) >= 4 && !hasStrongSentenceEnd(tail) {
 			return true
 		}
 	}
@@ -186,6 +200,45 @@ func LooksIncompleteReply(s string) bool {
 		return true
 	}
 	return false
+}
+
+func unbalancedQuotes(s string) bool {
+	// ASCII double quotes: odd count → cut mid-string.
+	if strings.Count(s, `"`)%2 == 1 {
+		return true
+	}
+	opens := strings.Count(s, "“") + strings.Count(s, "「") + strings.Count(s, "『")
+	closes := strings.Count(s, "”") + strings.Count(s, "」") + strings.Count(s, "』")
+	return opens > closes
+}
+
+func lastStrongSentenceIndex(r []rune) int {
+	last := -1
+	for i := 0; i < len(r); i++ {
+		if isStrongSentenceEnd(r, i) {
+			last = i
+		}
+	}
+	return last
+}
+
+// TrimToLastSentence drops an unfinished trailing clause after the last 。！？～.
+// Returns "" if nothing complete remains.
+func TrimToLastSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)
+	i := lastStrongSentenceIndex(r)
+	if i < 0 {
+		return ""
+	}
+	out := strings.TrimSpace(string(r[:i+1]))
+	if out == "" || LooksLikeToolLeak(out) {
+		return ""
+	}
+	return out
 }
 
 func hasStrongSentenceEnd(s string) bool {

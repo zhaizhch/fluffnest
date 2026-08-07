@@ -40,6 +40,7 @@ Bundled under `internal/agent/skills/*/SKILL.md`:
 | `documents` | WeChat file attachments (PDF/docx/txt/md) |
 | `memory-keeper` | Remember / forget preferences |
 | `owner-dossier` | Living structured profile of the master |
+| `journal` | Time-indexed thoughts / diary / mood / reflections |
 | `self-growth` | Agent self-improvement log |
 | `scheduler` | Care reminders + timed WeChat/pet pushes |
 | `planner` | Break down goals / todos / next steps |
@@ -60,6 +61,7 @@ Skills are routed via `RouteSkills`: trigger match → follow-up continuity (`la
 - `pet_notify` — make the desktop pet bubble immediately (`pet.notify` host action)
 - `memory_read` / `memory_write` / `memory_delete` / `memory_list` / `memory_search`
 - `owner_dossier_get` / `owner_dossier_update` / `owner_dossier_note`
+- `journal_write` / `journal_list` / `journal_search` — personal thoughts & diary by month→date
 - `self_dossier_get` / `self_dossier_update` / `self_dossier_log`
 - `multi_agent_run` — 组建持久 Crew（concurrent|sequential|handoff）；子 Agent 有 messages+inbox
 - `agent_send` / `agent_broadcast` / `agent_chat` / `team_status` — 团队通信与续聊（keep_alive）

@@ -19,6 +19,8 @@ type Memory struct {
 	Sessions map[string]SessionMemory         `json:"sessions"`
 	// OwnerProfiles: structured living dossier per WeChat peer (the human master).
 	OwnerProfiles map[string]OwnerDossier `json:"ownerProfiles,omitempty"`
+	// Journals: time-indexed personal thoughts / diary entries per peer.
+	Journals map[string][]JournalEntry `json:"journals,omitempty"`
 	// Self: agent self-improvement dossier (global).
 	Self *SelfDossier `json:"self,omitempty"`
 }
@@ -57,6 +59,7 @@ func OpenMemory(path string) (*Memory, error) {
 		Peers:         map[string]map[string]MemoryItem{},
 		Sessions:      map[string]SessionMemory{},
 		OwnerProfiles: map[string]OwnerDossier{},
+		Journals:      map[string][]JournalEntry{},
 		Self:          nil,
 	}
 	raw, err := os.ReadFile(path)
@@ -83,6 +86,9 @@ func OpenMemory(path string) (*Memory, error) {
 	}
 	if m.OwnerProfiles == nil {
 		m.OwnerProfiles = map[string]OwnerDossier{}
+	}
+	if m.Journals == nil {
+		m.Journals = map[string][]JournalEntry{}
 	}
 	if m.Self == nil {
 		sd := emptySelfDossier()
@@ -265,6 +271,15 @@ func (m *Memory) searchLocked(peerID, query string, limit int) []string {
 			blob := strings.ToLower(FormatOwnerDossier(d))
 			if strings.Contains(blob, query) && len(hits) < limit {
 				hits = append(hits, ownerRecallSnippet(d, query))
+			}
+		}
+		if js := m.Journals[peerID]; len(js) > 0 {
+			for i := len(js) - 1; i >= 0 && len(hits) < limit; i-- {
+				e := js[i]
+				blob := strings.ToLower(e.Date + " " + e.Kind + " " + e.Text + " " + strings.Join(e.Tags, " "))
+				if strings.Contains(blob, query) {
+					hits = append(hits, fmt.Sprintf("[journal %s/%s] %s", e.Date, e.Kind, truncateRunes(e.Text, 100)))
+				}
 			}
 		}
 	}

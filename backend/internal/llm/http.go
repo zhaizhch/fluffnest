@@ -164,9 +164,10 @@ type ChatMessage struct {
 }
 
 type CompletionResult struct {
-	Content   string
-	ToolCalls []ToolCall
-	Raw       chatCompletionResponse
+	Content      string
+	ToolCalls    []ToolCall
+	FinishReason string
+	Raw          chatCompletionResponse
 }
 
 type chatCompletionResponse struct {
@@ -387,20 +388,34 @@ func (c *Client) ChatCompletionEx(
 				// Empty text with no tool calls — bump token budget (thinking ate it) and retry.
 				if content == "" && len(msg.ToolCalls) == 0 && attempt+1 < llmMaxAttempts {
 					lastErr = fmt.Errorf("LLM 返回空内容")
-					if maxTokens < 900 {
+					if maxTokens < 1600 {
 						maxTokens = maxTokens * 2
-						if maxTokens > 900 {
-							maxTokens = 900
+						if maxTokens > 1600 {
+							maxTokens = 1600
 						}
 					}
 					nextDelay = retryAfterDelay(nil, attempt)
 					retryTransient = true
 					break
 				}
+				finish := parsed.Choices[0].FinishReason
+				// Hard length cut mid-thought: regenerate once with a larger budget.
+				if strings.EqualFold(finish, "length") && content != "" && len(msg.ToolCalls) == 0 &&
+					LooksIncompleteReply(content) && attempt+1 < llmMaxAttempts && maxTokens < 1600 {
+					maxTokens = maxTokens + 500
+					if maxTokens > 1600 {
+						maxTokens = 1600
+					}
+					lastErr = fmt.Errorf("LLM 输出被长度截断")
+					nextDelay = retryAfterDelay(nil, attempt)
+					retryTransient = true
+					break
+				}
 				return CompletionResult{
-					Content:   content,
-					ToolCalls: msg.ToolCalls,
-					Raw:       parsed,
+					Content:      content,
+					ToolCalls:    msg.ToolCalls,
+					FinishReason: finish,
+					Raw:          parsed,
 				}, nil
 			}
 			lastErr = fmt.Errorf("LLM 请求失败 (%d): %s", resp.StatusCode, TruncateChars(string(raw), 180))

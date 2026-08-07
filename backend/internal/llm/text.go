@@ -151,6 +151,7 @@ func CleanLine(raw string, max int) string {
 func CleanWechatReply(raw string, max int) string {
 	t := strings.TrimSpace(StripThinking(raw))
 	t = StripToolLeak(t)
+	t = stripMarkdownLight(t)
 	t = strings.ReplaceAll(t, "\r\n", "\n")
 	t = strings.Join(strings.Fields(strings.ReplaceAll(t, "\n", " ")), " ")
 	for _, wrap := range []string{`"`, `'`, "「", "」", "“", "”"} {
@@ -162,9 +163,21 @@ func CleanWechatReply(raw string, max int) string {
 	}
 	t = TruncateAtSentence(t, max)
 	if LooksIncompleteReply(t) {
+		// Prefer shipping finished sentences over a dangling mid-quote clause.
+		if trimmed := TrimToLastSentence(t); trimmed != "" && !LooksIncompleteReply(trimmed) {
+			return trimmed
+		}
 		return ""
 	}
 	return t
+}
+
+var mdBoldRe = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+
+func stripMarkdownLight(s string) string {
+	s = mdBoldRe.ReplaceAllString(s, "$1")
+	s = strings.ReplaceAll(s, "__", "")
+	return strings.TrimSpace(s)
 }
 
 // CleanWeatherLine keeps short multi-sentence weather advice (allows newlines → spaces).

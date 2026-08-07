@@ -19,15 +19,15 @@ import (
 
 const (
 	MaxCycles      = 4 // gather → act → finalize; WeChat shouldn't burn 6 LLM RTTs
-	MaxReplyChars  = 900
+	MaxReplyChars  = 1200
 	DefaultChannel = "wechat"
 )
 
 // Agent LLM budgets — enough headroom so WeChat replies aren't cut mid-sentence.
 var (
-	agentThinkOpts = llm.CompletionOpts{MaxTokens: 700, Timeout: 18 * time.Second, Temperature: 0.45}
-	agentFinalOpts = llm.CompletionOpts{MaxTokens: 900, Timeout: 18 * time.Second, Temperature: 0.5}
-	agentFastOpts  = llm.CompletionOpts{MaxTokens: 480, Timeout: 14 * time.Second, Temperature: 0.55}
+	agentThinkOpts = llm.CompletionOpts{MaxTokens: 1000, Timeout: 22 * time.Second, Temperature: 0.45}
+	agentFinalOpts = llm.CompletionOpts{MaxTokens: 1200, Timeout: 22 * time.Second, Temperature: 0.5}
+	agentFastOpts  = llm.CompletionOpts{MaxTokens: 720, Timeout: 16 * time.Second, Temperature: 0.55}
 )
 
 // Request is one agent turn from WeChat (or other channel).
@@ -109,10 +109,14 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	deps.Board = NewAgentBoard("")
 	deps.Crew = NewCrew(deps.Board)
 
-	// Capture favorites/people from this utterance before prompt assembly,
-	// so Essentials already reflects what the master just said.
+	// Capture favorites/people + explicit diary/thoughts before prompt assembly.
 	if n := rt.Memory.HarvestOwnerKnowledge(req.PeerID, req.Message); n > 0 {
 		log.Printf("[agent] harvested %d knowledge fields peer=%s", n, shortPeer(req.PeerID))
+	}
+	if kind, body, ok := DetectJournalIntent(req.Message); ok {
+		if _, err := rt.Memory.JournalAppend(req.PeerID, kind, body, "", "harvest", nil); err == nil {
+			log.Printf("[agent] journal %s saved peer=%s", kind, shortPeer(req.PeerID))
+		}
 	}
 
 	if req.Host != nil {
@@ -275,17 +279,23 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 
 		if len(res.ToolCalls) == 0 {
 			text := llm.CleanWechatReply(res.Content, MaxReplyChars)
-			if text == "" || llm.LooksIncompleteReply(text) {
-				// Mid-thought stall ("主人别急，卡卡这就") or stripped leak — don't ship.
-				if cycle < MaxCycles {
-					fastPath = false
-					messages = append(messages, llm.ChatMessage{
-						Role:    "user",
-						Content: "请给出完整的微信口语回复，把话说完；不要只说「别急/这就…」半截，也不要输出工具标记。",
-					})
-					trace = append(trace, "retry_incomplete_reply")
-					continue
+			lengthCut := strings.EqualFold(res.FinishReason, "length")
+			rawIncomplete := llm.LooksIncompleteReply(strings.TrimSpace(res.Content))
+			bad := text == "" || llm.LooksIncompleteReply(text)
+			if (bad || lengthCut || rawIncomplete) && cycle < MaxCycles {
+				fastPath = false
+				hint := "请给出完整的微信口语回复，把话说完；每句用句号收尾，不要停在引号、破折号或半截从句上，也不要输出工具标记。"
+				if lengthCut || rawIncomplete {
+					hint = "上一段话说到一半就断了。请一次性重写完整微信口语回复（把要点/争议说完），句子必须说完，禁止半截引号或 Markdown。"
 				}
+				messages = append(messages, llm.ChatMessage{
+					Role:    "user",
+					Content: hint,
+				})
+				trace = append(trace, "retry_incomplete_reply")
+				continue
+			}
+			if bad {
 				if usedTool {
 					return rt.synthesize(ctx, req, messages, cycle, toolsUsed, skillsUsed, append(trace, "incomplete_synth"), deps)
 				}
@@ -421,7 +431,7 @@ func needsToolsLikely(matched []Skill, message string, atts []types.ImAttachment
 func skillRequiresTools(name string) bool {
 	switch name {
 	case "research", "weather-care", "news-digest", "documents", "scheduler",
-		"planner", "lingua", "memory-keeper", "owner-dossier", "self-growth", "multi-agent":
+		"planner", "lingua", "memory-keeper", "owner-dossier", "self-growth", "multi-agent", "journal":
 		return true
 	default:
 		return false
@@ -570,7 +580,7 @@ func (rt *Runtime) buildSystemPrompt(pet types.PetInstance, channel, city string
 	b.WriteString("Observe → Working Memory ∥ 检索agents → 主智能体判断是否 multi_agent_run → 工具 → 微信口语回复。\n")
 	b.WriteString("天气/时间/计算/翻译/记忆/提醒等确定性任务不要网页搜索；时事/人物近况才检索。\n")
 	b.WriteString("决策/利弊/多视角权衡可用多智能体会议（共享白板）；简单问题不要开会。\n")
-	b.WriteString("最终回复必须是给主人看的中文口语，不要输出 JSON/工具参数。")
+	b.WriteString("最终回复必须是给主人看的中文口语，句子说完再停；不要输出 JSON/工具参数/Markdown。")
 	return b.String()
 }
 
@@ -585,7 +595,7 @@ func (rt *Runtime) synthesize(
 	messages = append(messages, llm.ChatMessage{
 		Role: "user",
 		Content: fmt.Sprintf(
-			"请根据以上 rules/skills/tools/memory 结果，用「%s」口吻写出最终微信回复（≤%d字，句子要说完，直接回复）。原问题：%s",
+			"请根据以上 rules/skills/tools/memory 结果，用「%s」口吻写出最终微信回复（≤%d字，句子要说完，禁止半截引号，直接回复）。原问题：%s",
 			req.Pet.Name, MaxReplyChars, req.Message,
 		),
 	})
@@ -722,6 +732,7 @@ func skipWebSearchIntent(matched []Skill, msg string) bool {
 		"记住", "别忘", "忘记", "我的档案", "提醒我", "定个时", "取消提醒",
 		"讲个笑", "笑话", "运势", "占卜",
 		"我住", "我家在", "我叫", "叫我", "最喜欢", "最爱", "我女朋友", "我男朋友",
+		"日记", "想法", "心情", "感悟", "翻日记",
 		"weather", "translate", "remind",
 	} {
 		if strings.Contains(low, strings.ToLower(k)) || strings.Contains(msg, k) {
@@ -737,7 +748,7 @@ func skipWebSearchIntent(matched []Skill, msg string) bool {
 	for _, sk := range matched {
 		switch sk.Name {
 		case "weather-care", "scheduler", "lingua", "memory-keeper",
-			"owner-dossier", "self-growth", "documents":
+			"owner-dossier", "self-growth", "documents", "journal":
 			return true
 		}
 	}

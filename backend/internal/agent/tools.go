@@ -132,6 +132,34 @@ func toolSpecs() []llm.ToolSpec {
 			},
 			"required": []string{"note"},
 		}),
+		fnTool("journal_write", "把主人的想法/日记/心情/感悟按日期写入知识库（按月·日分类）。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"kind": map[string]any{"type": "string", "description": "thought|diary|mood|reflection（想法/日记/心情/感悟）"},
+				"text": map[string]any{"type": "string", "description": "正文"},
+				"date": map[string]any{"type": "string", "description": "可选 YYYY-MM-DD，默认今天"},
+				"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "可选标签"},
+			},
+			"required": []string{"text"},
+		}),
+		fnTool("journal_list", "按时间列出主人日记/想法。可按月份 YYYY-MM、日期、近 N 天、类型筛选。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"month":      map[string]any{"type": "string", "description": "YYYY-MM"},
+				"date":       map[string]any{"type": "string", "description": "YYYY-MM-DD"},
+				"kind":       map[string]any{"type": "string"},
+				"recentDays": map[string]any{"type": "integer", "description": "近 N 天，默认 14"},
+				"limit":      map[string]any{"type": "integer"},
+			},
+		}),
+		fnTool("journal_search", "按关键词搜索主人日记/想法（跨日期）。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string"},
+				"limit": map[string]any{"type": "integer"},
+			},
+			"required": []string{"query"},
+		}),
 		fnTool("self_dossier_get", "按需读取自我完整档案（默认 context 只有要点）。", map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -214,7 +242,7 @@ func toolSpecs() []llm.ToolSpec {
 		fnTool("load_skill", "加载一个专用 skill 工作流到上下文并按其 cycle 执行。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "如 research / multi-agent / weather-care / companion / memory-keeper / owner-dossier / self-growth / scheduler / news-digest / entertainment / planner / clarify / lingua / documents"},
+				"name": map[string]any{"type": "string", "description": "如 research / multi-agent / weather-care / companion / memory-keeper / owner-dossier / journal / self-growth / scheduler / news-digest / entertainment / planner / clarify / lingua / documents"},
 			},
 			"required": []string{"name"},
 		}),
@@ -332,6 +360,9 @@ func runTool(ctx context.Context, deps ToolDeps, tc llm.ToolCall) string {
 		"owner_dossier_get":   toolOwnerDossierGet,
 		"owner_dossier_update": toolOwnerDossierUpdate,
 		"owner_dossier_note":  toolOwnerDossierNote,
+		"journal_write":       toolJournalWrite,
+		"journal_list":        toolJournalList,
+		"journal_search":      toolJournalSearch,
 		"self_dossier_get":    toolSelfDossierGet,
 		"self_dossier_update": toolSelfDossierUpdate,
 		"self_dossier_log":    toolSelfDossierLog,
@@ -707,9 +738,12 @@ func toolMemoryList(_ context.Context, deps ToolDeps, _ map[string]any) string {
 	if deps.Memory == nil {
 		return "错误：memory 未就绪"
 	}
-	return deps.Memory.Snapshot(deps.PeerID) + "\n\n" +
-		deps.Memory.DossierBrief(deps.PeerID) +
-		"\n（完整档案请用 owner_dossier_get / self_dossier_get）"
+	out := deps.Memory.Snapshot(deps.PeerID) + "\n\n" +
+		deps.Memory.DossierBrief(deps.PeerID)
+	if jb := deps.Memory.JournalBriefForPrompt(deps.PeerID); jb != "" {
+		out += "\n\n" + jb
+	}
+	return out + "\n（完整档案用 owner_dossier_get / self_dossier_get；日记时间线用 journal_list）"
 }
 
 func toolOwnerDossierGet(_ context.Context, deps ToolDeps, _ map[string]any) string {
@@ -741,6 +775,73 @@ func toolOwnerDossierNote(_ context.Context, deps ToolDeps, args map[string]any)
 		return "记录失败：" + err.Error()
 	}
 	return "已追加主人笔记：" + truncateRunes(strings.TrimSpace(note), 80)
+}
+
+func toolJournalWrite(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	text, _ := args["text"].(string)
+	kind, _ := args["kind"].(string)
+	date, _ := args["date"].(string)
+	var tags []string
+	if raw, ok := args["tags"].([]any); ok {
+		for _, t := range raw {
+			if s, ok := t.(string); ok {
+				tags = append(tags, s)
+			}
+		}
+	}
+	entry, err := deps.Memory.JournalAppend(deps.PeerID, kind, text, date, "tool", tags)
+	if err != nil {
+		return "写入失败：" + err.Error()
+	}
+	return fmt.Sprintf("已记入%s（%s）：%s", journalKindLabel(entry.Kind), entry.Date, truncateRunes(entry.Text, 120))
+}
+
+func toolJournalList(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	month, _ := args["month"].(string)
+	date, _ := args["date"].(string)
+	kind, _ := args["kind"].(string)
+	recentDays := argInt(args, "recentDays", 14)
+	limit := argInt(args, "limit", 0)
+	if month == "" && date == "" && recentDays <= 0 {
+		recentDays = 14
+	}
+	entries := deps.Memory.JournalList(deps.PeerID, month, date, kind, recentDays, limit)
+	return FormatJournalTimeline(entries)
+}
+
+func toolJournalSearch(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	query, _ := args["query"].(string)
+	limit := argInt(args, "limit", 0)
+	entries := deps.Memory.JournalSearch(deps.PeerID, query, limit)
+	if len(entries) == 0 {
+		return "未找到相关日记/想法"
+	}
+	return FormatJournalTimeline(entries)
+}
+
+func argInt(args map[string]any, key string, def int) int {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 func toolSelfDossierGet(_ context.Context, deps ToolDeps, _ map[string]any) string {
