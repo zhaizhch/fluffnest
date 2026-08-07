@@ -21,8 +21,11 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 
-	// First line on stdout is the ready handshake for the Tauri host.
-	fmt.Printf("FLUFFNEST_AI_READY %s\n", ln.Addr().String())
+	// Handshake must reach the Tauri parent even when stdout is a pipe.
+	ready := fmt.Sprintf("FLUFFNEST_AI_READY %s\n", ln.Addr().String())
+	if _, err := os.Stdout.WriteString(ready); err != nil {
+		log.Fatalf("ready handshake: %v", err)
+	}
 	_ = os.Stdout.Sync()
 
 	srv := server.New()

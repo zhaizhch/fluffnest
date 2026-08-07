@@ -1,3 +1,4 @@
+mod aes_ecb;
 mod commands;
 mod go_bridge;
 mod im;
@@ -45,6 +46,19 @@ pub fn run() {
                 go_bridge::start();
                 // Prefetch weather so the first click is usually cache-hit (<1s).
                 let _ = crate::llm::fetch_weather_summary(&warm_city);
+            });
+
+            // Desk-pet style: stay alive in the menu bar even when windows are hidden.
+            #[cfg(target_os = "macos")]
+            {
+                let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+
+            // Resume ClawBot / notif bridges after relaunch (auth is already on disk).
+            let bridges = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                crate::im::sync_bridges(&bridges);
             });
 
             let show_pet = MenuItem::with_id(app, "show_pet", "显示宠物", true, None::<&str>)?;
@@ -137,8 +151,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "panel" {
-                if let WindowEvent::CloseRequested { api, .. } = event {
+            // Never destroy windows on close — hide so ClawBot poller keeps running.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "panel" || window.label() == "pet" {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -190,10 +205,23 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building fluffnest")
         .run(|_app, event| {
-            if let RunEvent::Exit = event {
-                crate::wechat_ilink::stop_poller();
-                crate::wechat_notif::stop_watcher();
-                go_bridge::shutdown();
+            match event {
+                RunEvent::ExitRequested { api, code, .. } => {
+                    // None = last window closed by user. Keep tray + WeChat poller alive.
+                    // Some(code) = tray Quit / programmatic exit — allow it.
+                    if code.is_none() {
+                        eprintln!("[fluffnest] prevent exit (window closed); poller stays up");
+                        api.prevent_exit();
+                    } else {
+                        eprintln!("[fluffnest] exit requested code={code:?}");
+                    }
+                }
+                RunEvent::Exit => {
+                    crate::wechat_ilink::stop_poller();
+                    crate::wechat_notif::stop_watcher();
+                    go_bridge::shutdown();
+                }
+                _ => {}
             }
         });
 }

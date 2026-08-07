@@ -92,10 +92,15 @@ func CleanLine(raw string, max int) string {
 // CleanWechatReply keeps multi-sentence WeChat replies (newlines → spaces).
 func CleanWechatReply(raw string, max int) string {
 	t := strings.TrimSpace(StripThinking(raw))
+	t = StripToolLeak(t)
 	t = strings.ReplaceAll(t, "\r\n", "\n")
 	t = strings.Join(strings.Fields(strings.ReplaceAll(t, "\n", " ")), " ")
 	for _, wrap := range []string{`"`, `'`, "「", "」", "“", "”"} {
 		t = strings.Trim(t, wrap)
+	}
+	// Never ship tool markup to WeChat even after light cleanup.
+	if LooksLikeToolLeak(t) {
+		return ""
 	}
 	return TruncateChars(t, max)
 }

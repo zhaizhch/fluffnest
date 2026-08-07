@@ -130,6 +130,7 @@ fn fire_schedule(app: &AppHandle, job: &ScheduleJob) -> Result<(), String> {
                         detail: Some(job.title.clone()),
                         message_id: None,
                         auto_replying: None,
+                        channel: None,
                     },
                 );
             }

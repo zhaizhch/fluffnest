@@ -48,6 +48,8 @@ pub struct ImIngestRequest {
     pub source: String,
     pub sender: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::state::ImAttachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,13 +69,19 @@ pub struct ImDraftResult {
     pub channel: String,
 }
 
-fn dedup_hash(source: &str, sender: &str, text: &str) -> String {
+fn dedup_hash(source: &str, sender: &str, text: &str, attachments: &[crate::state::ImAttachment]) -> String {
     let mut h = Sha256::new();
     h.update(source.as_bytes());
     h.update(b"|");
     h.update(sender.as_bytes());
     h.update(b"|");
     h.update(text.as_bytes());
+    for a in attachments {
+        h.update(b"|");
+        h.update(a.path.as_bytes());
+        h.update(b":");
+        h.update(a.name.as_bytes());
+    }
     hex::encode(h.finalize())
 }
 
@@ -128,16 +136,22 @@ pub fn ingest_message(app: &AppHandle, req: ImIngestRequest) -> Result<Option<Im
     } else {
         req.sender.trim().to_string()
     };
-    if text.is_empty() && req.source != "notif" {
+    let has_attachments = !req.attachments.is_empty();
+    if text.is_empty() && req.source != "notif" && !has_attachments {
         return Ok(None);
     }
     let body = if text.is_empty() {
-        "（有新消息）".into()
+        if has_attachments {
+            let names: Vec<&str> = req.attachments.iter().map(|a| a.name.as_str()).collect();
+            format!("[文件] {}", names.join("、"))
+        } else {
+            "（有新消息）".into()
+        }
     } else {
         text
     };
 
-    let hash = dedup_hash(&req.source, &sender, &body);
+    let hash = dedup_hash(&req.source, &sender, &body, &req.attachments);
     if seen_recently(&hash) {
         return Ok(None);
     }
@@ -209,6 +223,7 @@ pub fn ingest_message(app: &AppHandle, req: ImIngestRequest) -> Result<Option<Im
         source: req.source.clone(),
         sender: sender.clone(),
         text: body.clone(),
+        attachments: req.attachments.clone(),
         summary: Some(summary.clone()),
         urgency: Some(urgency.clone()),
         context_token: req.context_token.clone(),
@@ -283,6 +298,7 @@ pub fn ingest_message(app: &AppHandle, req: ImIngestRequest) -> Result<Option<Im
             detail: Some(format!("{sender} · {summary}")),
             message_id: Some(msg.id.clone()),
             auto_replying: Some(false),
+            channel: Some(req.source.clone()),
         };
         let _ = app.emit("pet-says", &payload);
 
@@ -307,15 +323,16 @@ pub fn ingest_message(app: &AppHandle, req: ImIngestRequest) -> Result<Option<Im
         let token = req.context_token.clone().unwrap();
         let peer = req.peer_user_id.clone().unwrap();
         let user_text = body.clone();
+        let attachments = req.attachments.clone();
         let msg_id = msg.id.clone();
         let sender_label = sender.clone();
         let app2 = app.clone();
         std::thread::spawn(move || {
-            match auto_chat_reply(&app2, &user_text, &peer) {
+            match auto_chat_reply(&app2, &user_text, &peer, &attachments) {
                 Ok(reply) => match wechat_ilink::send_text(&app2, &peer, &token, &reply) {
                     Ok(()) => {
                         let _ = acknowledge(&app2, &msg_id);
-                        // No pet-says popup — frontend shows this only when the user opens the pet.
+                        // No pet-says draft popup — ClawBot only bubbles when the user opens the pet.
                         let _ = app2.emit(
                             "im-auto-replied",
                             serde_json::json!({
@@ -371,7 +388,12 @@ pub fn ingest_message(app: &AppHandle, req: ImIngestRequest) -> Result<Option<Im
     Ok(Some(msg))
 }
 
-fn auto_chat_reply(app: &AppHandle, user_message: &str, peer_user_id: &str) -> Result<String, String> {
+fn auto_chat_reply(
+    app: &AppHandle,
+    user_message: &str,
+    peer_user_id: &str,
+    attachments: &[crate::state::ImAttachment],
+) -> Result<String, String> {
     let shared = app.state::<SharedState>();
     let guard = shared.0.lock().map_err(|e| e.to_string())?;
     let pet = guard
@@ -396,6 +418,7 @@ fn auto_chat_reply(app: &AppHandle, user_message: &str, peer_user_id: &str) -> R
         user_message,
         Some(peer_user_id),
         Some(host),
+        attachments,
     )?;
 
     if !host_actions.is_empty() {
@@ -473,7 +496,18 @@ pub fn draft_reply(app: &AppHandle, message_id: &str, refresh: bool) -> Result<I
                 };
                 (summary, draft, suggestions)
             }
-            Err(e) => return Err(format!("生成回复建议失败: {e}")),
+            Err(e) => {
+                // Local fallback so a transient LLM/network blip still shows usable drafts.
+                let summary: String = msg.text.chars().take(40).collect();
+                let draft = "收到，我稍后回复你～".to_string();
+                let suggestions = vec![
+                    draft.clone(),
+                    "好的，没问题。".into(),
+                    "稍等，我这边确认一下再告诉你。".into(),
+                ];
+                eprintln!("[im] suggest failed, using offline drafts: {e}");
+                (format!("（离线兜底）{summary}"), draft, suggestions)
+            }
         }
     } else {
         let draft = "收到，我稍后回复～".to_string();
@@ -837,6 +871,7 @@ pub fn check_im_nudges(app: &AppHandle) {
             detail: Some(format!("{sender} · {summary}")),
             message_id: None,
             auto_replying: None,
+            channel: None,
         };
         let _ = app.emit("pet-says", &payload);
     }

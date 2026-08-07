@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
@@ -94,6 +94,9 @@ export function PetApp() {
   const [pet, setPet] = useState<PetInstance | null>(null);
   const [behavior, setBehavior] = useState<PetBehavior>("idle");
   const [bubble, setBubble] = useState<string | null>(null);
+  /** 0 = latest; higher = older lines in bubbleHistoryRef. */
+  const [bubbleHistIdx, setBubbleHistIdx] = useState(0);
+  const bubbleHistoryRef = useRef<string[]>([]);
   const [facing, setFacing] = useState<"left" | "right">("right");
   /** Rising KaKa explicit APNG action (Dragging / RbtnClk / StopDrag…) */
   const [risingAction, setRisingAction] = useState<string | null>(null);
@@ -155,57 +158,57 @@ export function PetApp() {
   }, [pet]);
 
   const showBubble = useCallback((text: string, ms?: number) => {
-    setBubble(text);
+    const t = text.trim();
+    if (!t) return;
+    const hist = bubbleHistoryRef.current;
+    if (hist[0] !== t) {
+      bubbleHistoryRef.current = [t, ...hist.filter((x) => x !== t)].slice(0, 8);
+    }
+    setBubbleHistIdx(0);
+    setBubble(t);
     if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current);
-    const hold = ms ?? bubbleDisplayMs(text);
-    bubbleTimer.current = window.setTimeout(() => setBubble(null), hold);
+    const hold = ms ?? bubbleDisplayMs(t);
+    bubbleTimer.current = window.setTimeout(() => {
+      setBubble(null);
+      setBubbleHistIdx(0);
+    }, hold);
   }, []);
 
+  const peekBubbleHistory = useCallback(
+    (e: MouseEvent | PointerEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const hist = bubbleHistoryRef.current;
+      if (hist.length < 2) return;
+      const next = (bubbleHistIdx + 1) % hist.length;
+      setBubbleHistIdx(next);
+      setBubble(hist[next] ?? null);
+      if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current);
+      const line = hist[next] ?? "";
+      const hold = bubbleDisplayMs(line, { min: 7000, max: 22000 });
+      bubbleTimer.current = window.setTimeout(() => {
+        setBubble(null);
+        setBubbleHistIdx(0);
+      }, hold);
+    },
+    [bubbleHistIdx],
+  );
   const flushPendingWechat = useCallback(() => {
     const pending = pendingWechatRef.current;
     if (!pending) return false;
     pendingWechatRef.current = null;
     setWechatPending(0);
     setLatestImId(pending.messageId);
-    setMenuOpen(false);
-    setFortuneText(null);
-
+    // ClawBot: bubble only — no draft / suggestion popup.
     if (pending.error) {
       showBubble(`微信自动回复失败：${pending.error}`.slice(0, 48), 4200);
-      setInfoCard({
-        kind: "wechat",
-        title: "微信 · 自动回复失败",
-        summary: pending.incoming || pending.error,
-        tip: pending.error,
-        messageId: pending.messageId,
-        canSend: false,
-        draft: "",
-        sender: pending.sender,
-        incoming: pending.incoming,
-        suggestions: [],
-      });
     } else {
       const preview = pending.text.slice(0, 36);
       showBubble(
         preview ? `微信已自动回复：${preview}` : "微信已自动回复",
         4200,
       );
-      setInfoCard({
-        kind: "wechat",
-        title: "微信 · 已自动回复",
-        summary: pending.incoming || pending.text,
-        tip: "已搜索整理并发送到微信。也可改文案后点「重新建议」。",
-        messageId: pending.messageId,
-        canSend: false,
-        draft: pending.text,
-        sender: pending.sender,
-        incoming: pending.incoming,
-        suggestions: pending.text ? [pending.text] : [],
-      });
     }
-    void getCurrentWindow()
-      .setSize(new LogicalSize(WECHAT_SIZE.w, WECHAT_SIZE.h))
-      .catch(() => undefined);
     return true;
   }, [showBubble]);
 
@@ -410,9 +413,7 @@ export function PetApp() {
       const logicalY = pos.y / scale;
       const ww = size.width / scale;
       const wh = size.height / scale;
-      walkDir.current = Math.random() < 0.5 ? -1 : 1;
-      setFacing(walkDir.current > 0 ? "right" : "left");
-      const margin = 24;
+      const margin = 28;
       const monScale = mon?.scaleFactor ?? scale;
       const minX = mon ? mon.position.x / monScale + margin : 40;
       const minY = mon ? mon.position.y / monScale + margin + 28 : 60;
@@ -422,18 +423,44 @@ export function PetApp() {
       const maxY = mon
         ? mon.position.y / monScale + mon.size.height / monScale - wh - margin
         : 640;
-      const softMaxX = Math.min(
+      // Warp uses almost the full monitor so the teleport is obviously far.
+      const warpMaxX = Math.min(
         maxX,
-        minX + Math.min(720, Math.max(280, (maxX - minX) * 0.45)),
+        minX + Math.min(1400, Math.max(520, (maxX - minX) * 0.88)),
       );
-      const nx = Math.max(
-        minX,
-        Math.min(softMaxX, logicalX + walkDir.current * (80 + Math.random() * 140)),
-      );
-      const ny = Math.max(
-        minY,
-        Math.min(maxY, logicalY + (Math.random() - 0.5) * 120),
-      );
+      const spanX = Math.max(200, warpMaxX - minX);
+      const spanY = Math.max(120, maxY - minY);
+      const minDist = Math.min(Math.max(380, spanX * 0.42), spanX * 0.9);
+
+      // Prefer landing on the opposite horizontal half for a clear jump.
+      const midX = (minX + warpMaxX) / 2;
+      const goRight = logicalX < midX;
+      let nx = goRight
+        ? midX + spanX * (0.28 + Math.random() * 0.22)
+        : midX - spanX * (0.28 + Math.random() * 0.22);
+      let ny =
+        minY +
+        spanY * (0.15 + Math.random() * 0.7) +
+        (Math.random() - 0.5) * Math.min(160, spanY * 0.25);
+      nx = Math.max(minX, Math.min(warpMaxX, nx));
+      ny = Math.max(minY, Math.min(maxY, ny));
+
+      // If still too close (e.g. already near the preferred side), flip hard.
+      if (Math.hypot(nx - logicalX, ny - logicalY) < minDist) {
+        nx = goRight
+          ? Math.min(warpMaxX, logicalX + minDist)
+          : Math.max(minX, logicalX - minDist);
+        ny = Math.max(
+          minY,
+          Math.min(
+            maxY,
+            logicalY + (goRight ? 1 : -1) * (60 + Math.random() * 140),
+          ),
+        );
+      }
+
+      walkDir.current = nx >= logicalX ? 1 : -1;
+      setFacing(walkDir.current > 0 ? "right" : "left");
       await win.setPosition(new LogicalPosition(nx, ny));
     } catch {
       /* ignore */
@@ -518,7 +545,7 @@ export function PetApp() {
         if (step.warp || step.behavior === "warp") {
           await sleep(Math.min(420, ms * 0.35));
           if (gen !== sequenceGen.current) return;
-          void maybeWarp();
+          await maybeWarp();
           await sleep(Math.max(0, ms - Math.min(420, ms * 0.35)));
         } else {
           if (step.move || step.behavior === "walk") {
@@ -559,7 +586,7 @@ export function PetApp() {
         if (step.warp) {
           await sleep(Math.min(280, step.durationMs * 0.4));
           if (gen !== sequenceGen.current) return;
-          void maybeWarp();
+          await maybeWarp();
           await sleep(
             Math.max(0, step.durationMs - Math.min(280, step.durationMs * 0.4)),
           );
@@ -653,20 +680,19 @@ export function PetApp() {
       }
 
       if (payload.kind === "wechat") {
-        // ClawBot auto-reply stays silent until the user opens the pet.
-        if (payload.autoReplying) {
-          const mid =
-            (payload.messageId && payload.messageId.trim()) ||
-            latestImIdRef.current;
-          if (mid) setLatestImId(mid);
-          return;
-        }
-        setMenuOpen(false);
-        setFortuneText(null);
         const mid =
           (payload.messageId && payload.messageId.trim()) ||
           latestImIdRef.current;
         if (mid) setLatestImId(mid);
+        // ClawBot: bubble / silent only — never open draft suggestion popup.
+        if (payload.autoReplying || payload.channel === "clawbot") {
+          if (!payload.autoReplying && payload.text?.trim()) {
+            showBubble(payload.text, bubbleDisplayMs(payload.text));
+          }
+          return;
+        }
+        setMenuOpen(false);
+        setFortuneText(null);
         setInfoCard({
           kind: "wechat",
           title: "微信来信",
@@ -1430,6 +1456,14 @@ export function PetApp() {
     }
     setMenuBusy(true);
     try {
+      const inbox = await api.getImInbox();
+      const msg = inbox.find((m) => m.id === latestImId);
+      // ClawBot chats auto-reply in WeChat — no draft suggestion popup on the pet.
+      if (msg?.source === "clawbot") {
+        setMenuOpen(false);
+        showBubble("ClawBot 会在微信里自动回复～", 3200);
+        return;
+      }
       const draft = await api.draftImReply(latestImId);
       setMenuOpen(false);
       setFortuneText(null);
@@ -1564,11 +1598,41 @@ export function PetApp() {
             </div>
           </div>
         ) : (
-          bubble && <div className="bubble">{bubble}</div>
+          bubble && (
+            <div
+              className={`bubble${bubbleHistIdx > 0 ? " bubble-past" : ""}${
+                bubbleHistoryRef.current.length > 1 ? " bubble-has-hist" : ""
+              }`}
+              title={
+                bubbleHistoryRef.current.length > 1
+                  ? "点一下回看上一句"
+                  : undefined
+              }
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={peekBubbleHistory}
+              role="status"
+            >
+              {bubble}
+              {bubbleHistoryRef.current.length > 1 && (
+                <span className="bubble-hist-mark" aria-hidden>
+                  {Array.from({ length: Math.min(bubbleHistoryRef.current.length, 4) }, (_, i) => (
+                    <i
+                      key={i}
+                      className={i === bubbleHistIdx % Math.min(bubbleHistoryRef.current.length, 4) ? "on" : ""}
+                    />
+                  ))}
+                </span>
+              )}
+            </div>
+          )
         )}
         <div className="stage">
           <div className="prop prop-swing" aria-hidden />
-          <div className="prop prop-rope" aria-hidden />
+          <div className="prop prop-rope" aria-hidden>
+            <i className="rope-handle rope-handle-l" />
+            <i className="rope-handle rope-handle-r" />
+            <i className="rope-cord" />
+          </div>
           <div className="prop prop-cup" aria-hidden />
           <div className="fx fx-bubbles" aria-hidden>
             <span /><span /><span /><span />

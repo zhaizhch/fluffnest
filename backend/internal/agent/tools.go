@@ -11,34 +11,38 @@ import (
 	"github.com/fluffnest/deskpet/backend/internal/geo"
 	"github.com/fluffnest/deskpet/backend/internal/llm"
 	"github.com/fluffnest/deskpet/backend/internal/news"
+	"github.com/fluffnest/deskpet/backend/internal/docread"
 	"github.com/fluffnest/deskpet/backend/internal/search"
 	"github.com/fluffnest/deskpet/backend/internal/types"
 	"github.com/fluffnest/deskpet/backend/internal/weather"
 )
 
 type ToolDeps struct {
-	Search  *search.Service
-	Weather *weather.Service
-	News    *news.Service
-	Geo     *geo.Service
-	Memory  *Memory
-	Catalog Catalog
-	City    string
-	PeerID  string
-	Host    *HostBridge
-	Pet     types.PetInstance
-	LLM     *llm.Client
-	LlmCfg  types.LlmSettings
+	Search      *search.Service
+	Weather     *weather.Service
+	News        *news.Service
+	Geo         *geo.Service
+	Memory      *Memory
+	Catalog     Catalog
+	City        string
+	PeerID      string
+	Host        *HostBridge
+	Pet         types.PetInstance
+	LLM         *llm.Client
+	LlmCfg      types.LlmSettings
+	Attachments []types.ImAttachment
+	MediaRoot   string
 }
 
 type toolHandler func(ctx context.Context, deps ToolDeps, args map[string]any) string
 
 func toolSpecs() []llm.ToolSpec {
 	return []llm.ToolSpec{
-		fnTool("web_search", "搜索互联网（百科/新闻/事实）。需要外部依据时必须调用。", map[string]any{
+		fnTool("web_search", "国内+国外联邦搜索（搜狗微信/Bing国内 ∥ Bing国际/DDG/百科/Google News），结果合并。调用前会自动优化查询词；请把用户原话放进 query，不必自己翻译。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "搜索词"},
+				"query": map[string]any{"type": "string", "description": "用户原始问题或核心实体；工具会改写成国内+国外检索词"},
+				"type":  map[string]any{"type": "string", "description": "web|news，news 会追加时效关键词"},
 			},
 			"required": []string{"query"},
 		}),
@@ -95,21 +99,62 @@ func toolSpecs() []llm.ToolSpec {
 			},
 			"required": []string{"key"},
 		}),
-		fnTool("memory_list", "列出当前可见记忆摘要。", map[string]any{
+		fnTool("memory_list", "按需列出记忆摘要（整库不在默认 context，需要时再调）。", map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		}),
-		fnTool("memory_search", "按关键词搜索记忆（key/value/session notes）。", map[string]any{
+		fnTool("memory_search", "按需按关键词搜索记忆（key/value/session notes）。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string", "description": "关键词"},
 			},
 			"required": []string{"query"},
 		}),
+		fnTool("owner_dossier_get", "按需读取主人完整档案（默认 context 只有要点）。", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}),
+		fnTool("owner_dossier_update", "更新主人档案某一字段。section=identity|work|lifestyle|preferences|relationships|goals|boundaries|context。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"section": map[string]any{"type": "string"},
+				"key":     map[string]any{"type": "string", "description": "如 nickname/home_city/tone"},
+				"value":   map[string]any{"type": "string"},
+			},
+			"required": []string{"section", "key", "value"},
+		}),
+		fnTool("owner_dossier_note", "向主人档案追加一条自由笔记（稳定观察，非一次性闲聊）。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"note": map[string]any{"type": "string"},
+			},
+			"required": []string{"note"},
+		}),
+		fnTool("self_dossier_get", "按需读取自我完整档案（默认 context 只有要点）。", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}),
+		fnTool("self_dossier_update", "更新自我档案字段。section=identity|capabilities|serviceStyle|masterFit。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"section": map[string]any{"type": "string"},
+				"key":     map[string]any{"type": "string"},
+				"value":   map[string]any{"type": "string"},
+			},
+			"required": []string{"section", "key", "value"},
+		}),
+		fnTool("self_dossier_log", "记录自我成长条目。kind=lesson|improvement|note。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"kind": map[string]any{"type": "string", "description": "lesson|improvement|note"},
+				"text": map[string]any{"type": "string"},
+			},
+			"required": []string{"kind", "text"},
+		}),
 		fnTool("load_skill", "加载一个专用 skill 工作流到上下文并按其 cycle 执行。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "如 research / weather-care / companion / memory-keeper / scheduler / news-digest / entertainment / planner / clarify / lingua"},
+				"name": map[string]any{"type": "string", "description": "如 research / weather-care / companion / memory-keeper / owner-dossier / self-growth / scheduler / news-digest / entertainment / planner / clarify / lingua / documents"},
 			},
 			"required": []string{"name"},
 		}),
@@ -185,6 +230,13 @@ func toolSpecs() []llm.ToolSpec {
 			},
 			"required": []string{"mode", "text"},
 		}),
+		fnTool("read_document", "读取本轮微信附件或 wechat-media 中的文档并抽取文本（pdf/docx/txt/md）。收到文件后必须先调用再回答。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":  map[string]any{"type": "string", "description": "附件绝对路径；可空则读第一个附件"},
+				"index": map[string]any{"type": "integer", "description": "附件索引，从 0 起；path 优先"},
+			},
+		}),
 	}
 }
 
@@ -216,8 +268,14 @@ func runTool(ctx context.Context, deps ToolDeps, tc llm.ToolCall) string {
 		"memory_write":     toolMemoryWrite,
 		"memory_delete":    toolMemoryDelete,
 		"memory_list":      toolMemoryList,
-		"memory_search":    toolMemorySearch,
-		"load_skill":       toolLoadSkill,
+		"memory_search":       toolMemorySearch,
+		"owner_dossier_get":   toolOwnerDossierGet,
+		"owner_dossier_update": toolOwnerDossierUpdate,
+		"owner_dossier_note":  toolOwnerDossierNote,
+		"self_dossier_get":    toolSelfDossierGet,
+		"self_dossier_update": toolSelfDossierUpdate,
+		"self_dossier_log":    toolSelfDossierLog,
+		"load_skill":          toolLoadSkill,
 		"list_skills":      toolListSkills,
 		"reminder_list":    toolReminderList,
 		"reminder_set":     toolReminderSet,
@@ -227,6 +285,7 @@ func runTool(ctx context.Context, deps ToolDeps, tc llm.ToolCall) string {
 		"schedule_cancel":  toolScheduleCancel,
 		"pet_notify":       toolPetNotify,
 		"rewrite_text":     toolRewriteText,
+		"read_document":    toolReadDocument,
 	}
 	h, ok := handlers[tc.Function.Name]
 	if !ok {
@@ -244,11 +303,125 @@ func toolWebSearch(ctx context.Context, deps ToolDeps, args map[string]any) stri
 	if deps.Search == nil {
 		return "错误：搜索服务未就绪"
 	}
-	hits, err := deps.Search.Search(ctx, q, 6)
-	if err != nil {
-		return "搜索失败：" + err.Error()
+	kind, _ := args["type"].(string)
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" && searchLooksNews(q) {
+		kind = "news"
 	}
-	return "搜索「" + q + "」：\n" + search.FormatHits(hits)
+
+	optimized := rewriteSearchQuery(ctx, deps, q, kind)
+	kind = optimized.Kind
+	hits, err := deps.Search.SearchOpt(ctx, q, search.Options{
+		Limit:       8,
+		Type:        kind,
+		CNQueries:   optimized.CN,
+		IntlQueries: optimized.Intl,
+	})
+	if err != nil {
+		return "搜索失败：" + err.Error() +
+			"\n优化后国内：" + strings.Join(optimized.CN, " · ") +
+			"\n优化后国外：" + strings.Join(optimized.Intl, " · ")
+	}
+	note := "\n（查询优化：国内「" + strings.Join(optimized.CN, " · ") +
+		"」∥ 国外「" + strings.Join(optimized.Intl, " · ") + "」）"
+	return "搜索「" + q + "」" + note + "：\n" + search.FormatHits(hits)
+}
+
+// rewriteSearchQuery optimizes the raw user question before fanout.
+// Heuristic always; optional short LLM polish when configured.
+func rewriteSearchQuery(ctx context.Context, deps ToolDeps, raw, kind string) search.OptimizedQuery {
+	base := search.OptimizeQuery(raw, kind)
+	if deps.LLM == nil {
+		return base
+	}
+	cfg := deps.LlmCfg
+	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.APIBase) == "" {
+		return base
+	}
+
+	ctx2, cancel := context.WithTimeout(ctx, 3500*time.Millisecond)
+	defer cancel()
+	prompt := "你是搜索查询优化器。把用户问题改写成便于检索的关键词。\n" +
+		"只输出 JSON（不要 markdown）：{\"cn\":[\"中文词1\",\"中文词2\"],\"intl\":[\"English or Japanese 1\",\"...\"],\"type\":\"news|web\"}\n" +
+		"规则：cn 给国内引擎，intl 给国外引擎；去掉口语废话；新闻/成绩类 type=news；最多各 3 条。\n" +
+		"用户问题：" + raw
+	opts := llm.CompletionOpts{MaxTokens: 140, Timeout: 3 * time.Second, Temperature: 0.2}
+	out, err := deps.LLM.ChatCompletion(ctx2, cfg, []map[string]string{
+		{"role": "system", "content": "Output JSON only."},
+		{"role": "user", "content": prompt},
+	}, opts)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return base
+	}
+	parsed := parseOptimizedJSON(out)
+	if len(parsed.CN) == 0 && len(parsed.Intl) == 0 {
+		return base
+	}
+	if parsed.Kind == "news" || parsed.Kind == "web" {
+		base.Kind = parsed.Kind
+	}
+	if len(parsed.CN) > 0 {
+		base.CN = mergeUniqueQueries(parsed.CN, base.CN, 4)
+	}
+	if len(parsed.Intl) > 0 {
+		base.Intl = mergeUniqueQueries(parsed.Intl, base.Intl, 4)
+	}
+	base.Note = "启发式+LLM 优化"
+	return base
+}
+
+func parseOptimizedJSON(raw string) search.OptimizedQuery {
+	raw = strings.TrimSpace(raw)
+	if i := strings.Index(raw, "{"); i >= 0 {
+		if j := strings.LastIndex(raw, "}"); j > i {
+			raw = raw[i : j+1]
+		}
+	}
+	var obj struct {
+		CN   []string `json:"cn"`
+		Intl []string `json:"intl"`
+		Type string   `json:"type"`
+	}
+	if json.Unmarshal([]byte(raw), &obj) != nil {
+		return search.OptimizedQuery{}
+	}
+	return search.OptimizedQuery{CN: obj.CN, Intl: obj.Intl, Kind: strings.ToLower(strings.TrimSpace(obj.Type))}
+}
+
+func mergeUniqueQueries(primary, fallback []string, limit int) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(xs []string) {
+		for _, s := range xs {
+			s = strings.TrimSpace(s)
+			if s == "" || seen[strings.ToLower(s)] {
+				continue
+			}
+			seen[strings.ToLower(s)] = true
+			out = append(out, s)
+			if len(out) >= limit {
+				return
+			}
+		}
+	}
+	add(primary)
+	add(fallback)
+	return out
+}
+
+func searchLooksNews(q string) bool {
+	keys := []string{
+		"最新", "新料", "更新", "补丁", "版本", "新闻", "热点", "冠军", "成绩", "结果",
+		"区间赏", "区間賞", "名单", "选手",
+		"latest", "update", "patch", "news", "release", "results", "winner", "champion",
+	}
+	low := strings.ToLower(q)
+	for _, k := range keys {
+		if strings.Contains(low, strings.ToLower(k)) || strings.Contains(q, k) {
+			return true
+		}
+	}
+	return false
 }
 
 func toolWeather(ctx context.Context, deps ToolDeps, args map[string]any) string {
@@ -545,7 +718,72 @@ func toolMemoryList(_ context.Context, deps ToolDeps, _ map[string]any) string {
 	if deps.Memory == nil {
 		return "错误：memory 未就绪"
 	}
-	return deps.Memory.Snapshot(deps.PeerID)
+	return deps.Memory.Snapshot(deps.PeerID) + "\n\n" +
+		deps.Memory.DossierBrief(deps.PeerID) +
+		"\n（完整档案请用 owner_dossier_get / self_dossier_get）"
+}
+
+func toolOwnerDossierGet(_ context.Context, deps ToolDeps, _ map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	return FormatOwnerDossier(deps.Memory.OwnerGet(deps.PeerID))
+}
+
+func toolOwnerDossierUpdate(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	section, _ := args["section"].(string)
+	key, _ := args["key"].(string)
+	value, _ := args["value"].(string)
+	if err := deps.Memory.OwnerUpdateField(deps.PeerID, section, key, value); err != nil {
+		return "更新失败：" + err.Error()
+	}
+	return fmt.Sprintf("已写入主人档案 %s.%s = %s", strings.TrimSpace(section), strings.TrimSpace(key), truncateRunes(strings.TrimSpace(value), 80))
+}
+
+func toolOwnerDossierNote(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	note, _ := args["note"].(string)
+	if err := deps.Memory.OwnerAppendNote(deps.PeerID, note); err != nil {
+		return "记录失败：" + err.Error()
+	}
+	return "已追加主人笔记：" + truncateRunes(strings.TrimSpace(note), 80)
+}
+
+func toolSelfDossierGet(_ context.Context, deps ToolDeps, _ map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	return FormatSelfDossier(deps.Memory.SelfGet())
+}
+
+func toolSelfDossierUpdate(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	section, _ := args["section"].(string)
+	key, _ := args["key"].(string)
+	value, _ := args["value"].(string)
+	if err := deps.Memory.SelfUpdateField(section, key, value); err != nil {
+		return "更新失败：" + err.Error()
+	}
+	return fmt.Sprintf("已写入自我档案 %s.%s = %s", strings.TrimSpace(section), strings.TrimSpace(key), truncateRunes(strings.TrimSpace(value), 80))
+}
+
+func toolSelfDossierLog(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Memory == nil {
+		return "错误：memory 未就绪"
+	}
+	kind, _ := args["kind"].(string)
+	text, _ := args["text"].(string)
+	if err := deps.Memory.SelfAppend(kind, text); err != nil {
+		return "记录失败：" + err.Error()
+	}
+	return fmt.Sprintf("已记录自我%s：%s", strings.TrimSpace(kind), truncateRunes(strings.TrimSpace(text), 80))
 }
 
 func toolLoadSkill(_ context.Context, deps ToolDeps, args map[string]any) string {
@@ -696,7 +934,7 @@ func toolRewriteText(ctx context.Context, deps ToolDeps, args map[string]any) st
 		{Role: "system", Content: sys},
 		{Role: "user", Content: user},
 	}
-	opts := llm.CompletionOpts{MaxTokens: 700, Timeout: 28 * time.Second, Temperature: 0.3}
+	opts := llm.CompletionOpts{MaxTokens: 400, Timeout: 14 * time.Second, Temperature: 0.3}
 	res, err := deps.LLM.ChatCompletionEx(ctx, deps.LlmCfg, msgs, nil, "", opts)
 	if err != nil {
 		return "改写失败：" + err.Error()
@@ -706,5 +944,40 @@ func toolRewriteText(ctx context.Context, deps ToolDeps, args map[string]any) st
 		return "改写失败：空结果"
 	}
 	return out
+}
+
+func toolReadDocument(_ context.Context, deps ToolDeps, args map[string]any) string {
+	path, _ := args["path"].(string)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		idx := 0
+		switch v := args["index"].(type) {
+		case float64:
+			idx = int(v)
+		case int:
+			idx = v
+		}
+		if len(deps.Attachments) == 0 {
+			return "错误：本轮没有附件。请让用户通过微信发送 PDF/Word/txt/md 文件。"
+		}
+		if idx < 0 || idx >= len(deps.Attachments) {
+			return fmt.Sprintf("错误：附件索引 %d 越界（共 %d 个）", idx, len(deps.Attachments))
+		}
+		path = deps.Attachments[idx].Path
+	}
+	allowed := make([]string, 0, len(deps.Attachments))
+	for _, a := range deps.Attachments {
+		if strings.TrimSpace(a.Path) != "" {
+			allowed = append(allowed, a.Path)
+		}
+	}
+	if err := docread.AllowPath(path, allowed, deps.MediaRoot); err != nil {
+		return "错误：" + err.Error()
+	}
+	res, err := docread.Extract(path, docread.DefaultMaxRunes)
+	if err != nil {
+		return "读取失败：" + err.Error()
+	}
+	return docread.FormatResult(res)
 }
 

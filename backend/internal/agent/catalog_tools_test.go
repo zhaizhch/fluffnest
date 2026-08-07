@@ -29,7 +29,7 @@ func TestLoadCatalogHasNewAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	needRules := []string{"core", "wechat", "safety", "tool-discipline", "persona"}
+	needRules := []string{"core", "wechat", "safety", "tool-discipline", "persona", "dossiers"}
 	for _, name := range needRules {
 		found := false
 		for _, r := range cat.Rules {
@@ -42,7 +42,7 @@ func TestLoadCatalogHasNewAssets(t *testing.T) {
 			t.Fatalf("missing rule %s", name)
 		}
 	}
-	needSkills := []string{"news-digest", "entertainment", "planner", "clarify", "lingua"}
+	needSkills := []string{"news-digest", "entertainment", "planner", "clarify", "lingua", "documents", "owner-dossier", "self-growth"}
 	for _, name := range needSkills {
 		if _, ok := cat.FindSkill(name); !ok {
 			t.Fatalf("missing skill %s", name)
@@ -51,6 +51,16 @@ func TestLoadCatalogHasNewAssets(t *testing.T) {
 	matched := cat.MatchSkills("讲个笑话")
 	if len(matched) == 0 {
 		t.Fatal("expected entertainment match for 讲个笑话")
+	}
+	docs := cat.MatchSkills("帮我总结这个PDF文件")
+	foundDoc := false
+	for _, sk := range docs {
+		if sk.Name == "documents" {
+			foundDoc = true
+		}
+	}
+	if !foundDoc {
+		t.Fatalf("expected documents skill, got %#v", docs)
 	}
 }
 

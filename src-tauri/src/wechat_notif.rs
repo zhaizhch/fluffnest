@@ -593,6 +593,7 @@ fn start_watcher(app: AppHandle) {
                         source: "notif".into(),
                         sender,
                         text,
+                        attachments: vec![],
                         context_token: None,
                         peer_user_id: None,
                     },

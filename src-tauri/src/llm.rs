@@ -33,6 +33,9 @@ pub struct PetSaysPayload {
     /// True when ClawBot will auto-send a pet reply (UI should not also draft).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_replying: Option<bool>,
+    /// IM channel (e.g. "clawbot") — UI skips draft suggestion popup for ClawBot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +98,7 @@ pub fn generate_wechat_agent_reply(
     user_message: &str,
     peer_user_id: Option<&str>,
     host: Option<serde_json::Value>,
+    attachments: &[crate::state::ImAttachment],
 ) -> Result<(String, Vec<serde_json::Value>), String> {
     let body = json!({
         "llm": llm,
@@ -105,6 +109,7 @@ pub fn generate_wechat_agent_reply(
         "peerId": peer_user_id.unwrap_or(""),
         "channel": "wechat",
         "host": host,
+        "attachments": attachments,
     });
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]

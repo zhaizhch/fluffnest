@@ -17,6 +17,10 @@ type Memory struct {
 	Global   map[string]MemoryItem            `json:"global"`
 	Peers    map[string]map[string]MemoryItem `json:"peers"`
 	Sessions map[string]SessionMemory         `json:"sessions"`
+	// OwnerProfiles: structured living dossier per WeChat peer (the human master).
+	OwnerProfiles map[string]OwnerDossier `json:"ownerProfiles,omitempty"`
+	// Self: agent self-improvement dossier (global).
+	Self *SelfDossier `json:"self,omitempty"`
 }
 
 type MemoryItem struct {
@@ -27,6 +31,8 @@ type MemoryItem struct {
 
 type SessionMemory struct {
 	Notes     []string `json:"notes"`
+	Digest    string   `json:"digest,omitempty"` // rolled-up episodic summary (injected via working memory)
+	Thread    string   `json:"thread,omitempty"` // open topic / pending commitment
 	UpdatedAt string   `json:"updatedAt"`
 }
 
@@ -46,10 +52,12 @@ func OpenMemory(path string) (*Memory, error) {
 		path = DefaultMemoryPath()
 	}
 	m := &Memory{
-		path:     path,
-		Global:   map[string]MemoryItem{},
-		Peers:    map[string]map[string]MemoryItem{},
-		Sessions: map[string]SessionMemory{},
+		path:          path,
+		Global:        map[string]MemoryItem{},
+		Peers:         map[string]map[string]MemoryItem{},
+		Sessions:      map[string]SessionMemory{},
+		OwnerProfiles: map[string]OwnerDossier{},
+		Self:          nil,
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -72,6 +80,13 @@ func OpenMemory(path string) (*Memory, error) {
 	}
 	if m.Sessions == nil {
 		m.Sessions = map[string]SessionMemory{}
+	}
+	if m.OwnerProfiles == nil {
+		m.OwnerProfiles = map[string]OwnerDossier{}
+	}
+	if m.Self == nil {
+		sd := emptySelfDossier()
+		m.Self = &sd
 	}
 	m.path = path
 	return m, nil
@@ -114,10 +129,20 @@ func (m *Memory) Snapshot(peerID string) string {
 				fmt.Fprintf(&b, "- %s = %s\n", k, v.Value)
 			}
 		}
-		if sess, ok := m.Sessions[peerID]; ok && len(sess.Notes) > 0 {
-			b.WriteString("\n### Session notes\n")
-			for _, n := range sess.Notes {
-				fmt.Fprintf(&b, "- %s\n", n)
+		if sess, ok := m.Sessions[peerID]; ok {
+			if t := strings.TrimSpace(sess.Thread); t != "" {
+				b.WriteString("\n### Open thread\n")
+				fmt.Fprintf(&b, "%s\n", t)
+			}
+			if d := strings.TrimSpace(sess.Digest); d != "" {
+				b.WriteString("\n### Session digest\n")
+				fmt.Fprintf(&b, "%s\n", d)
+			}
+			if len(sess.Notes) > 0 {
+				b.WriteString("\n### Session notes\n")
+				for _, n := range sess.Notes {
+					fmt.Fprintf(&b, "- %s\n", n)
+				}
 			}
 		}
 	}
@@ -190,6 +215,11 @@ func (m *Memory) Delete(peerID, key string, global bool) error {
 func (m *Memory) Search(peerID, query string, limit int) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.searchLocked(peerID, query, limit)
+}
+
+// searchLocked is the unlocked Search implementation. Caller must hold m.mu.
+func (m *Memory) searchLocked(peerID, query string, limit int) []string {
 	query = strings.TrimSpace(strings.ToLower(query))
 	if query == "" {
 		return nil
@@ -216,6 +246,12 @@ func (m *Memory) Search(peerID, query string, limit int) []string {
 			add("peer", k, v)
 		}
 		if sess, ok := m.Sessions[peerID]; ok {
+			if t := strings.TrimSpace(sess.Thread); t != "" && strings.Contains(strings.ToLower(t), query) && len(hits) < limit {
+				hits = append(hits, "[thread] "+t)
+			}
+			if d := strings.TrimSpace(sess.Digest); d != "" && strings.Contains(strings.ToLower(d), query) && len(hits) < limit {
+				hits = append(hits, "[digest] "+truncateRunes(d, 160))
+			}
 			for _, n := range sess.Notes {
 				if len(hits) >= limit {
 					break
@@ -225,8 +261,51 @@ func (m *Memory) Search(peerID, query string, limit int) []string {
 				}
 			}
 		}
+		if d, ok := m.OwnerProfiles[peerID]; ok {
+			blob := strings.ToLower(FormatOwnerDossier(d))
+			if strings.Contains(blob, query) && len(hits) < limit {
+				hits = append(hits, ownerRecallSnippet(d, query))
+			}
+		}
+	}
+	if m.Self != nil {
+		blob := strings.ToLower(FormatSelfDossier(*m.Self))
+		if strings.Contains(blob, query) && len(hits) < limit {
+			hits = append(hits, "[self_dossier] matched self profile")
+		}
 	}
 	return hits
+}
+
+func ownerRecallSnippet(d OwnerDossier, query string) string {
+	d = normalizeOwner(d)
+	type pair struct{ k, v string }
+	var candidates []pair
+	collect := func(section string, mp map[string]string) {
+		for k, v := range mp {
+			blob := strings.ToLower(section + " " + k + " " + v)
+			if strings.Contains(blob, query) {
+				candidates = append(candidates, pair{section + "." + k, v})
+			}
+		}
+	}
+	collect("identity", d.Identity)
+	collect("work", d.Work)
+	collect("lifestyle", d.Lifestyle)
+	collect("preferences", d.Preferences)
+	collect("relationships", d.Relationships)
+	collect("goals", d.Goals)
+	collect("boundaries", d.Boundaries)
+	collect("context", d.Context)
+	for _, n := range d.Notes {
+		if strings.Contains(strings.ToLower(n), query) {
+			candidates = append(candidates, pair{"note", n})
+		}
+	}
+	if len(candidates) == 0 {
+		return "[owner_dossier] matched profile text"
+	}
+	return fmt.Sprintf("[owner_dossier] %s = %s", candidates[0].k, truncateRunes(candidates[0].v, 120))
 }
 
 func (m *Memory) AddSessionNote(peerID, note string) error {
@@ -238,9 +317,9 @@ func (m *Memory) AddSessionNote(peerID, note string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sess := m.Sessions[peerID]
-	sess.Notes = append(sess.Notes, truncateRunes(note, 160))
-	if len(sess.Notes) > 12 {
-		sess.Notes = sess.Notes[len(sess.Notes)-12:]
+	sess.Notes = append(sess.Notes, truncateRunes(note, sessionNoteRunes))
+	if len(sess.Notes) > sessionNotesKeep {
+		sess.Notes = sess.Notes[len(sess.Notes)-sessionNotesKeep:]
 	}
 	sess.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	m.Sessions[peerID] = sess

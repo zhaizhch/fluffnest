@@ -310,12 +310,23 @@ pub struct WechatAuth {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImAttachment {
+    pub path: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImMessage {
     pub id: String,
     /// clawbot | notif | simulate
     pub source: String,
     pub sender: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ImAttachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// urgent | normal | noise

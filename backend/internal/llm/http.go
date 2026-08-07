@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	// Transient LLM failures (timeouts, 429, 5xx) get a few quick retries.
-	llmMaxAttempts = 3
-	llmRetryBase   = 280 * time.Millisecond
+	// Transient LLM failures (timeouts, 429, 5xx) get a couple quick retries.
+	llmMaxAttempts = 2
+	llmRetryBase   = 200 * time.Millisecond
 )
 
 const (
@@ -35,23 +35,45 @@ type Client struct {
 }
 
 func NewClient() *Client {
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 2 * time.Second}
+			var last error
+			// Prefer CN-reachable resolvers first; fall back if one is flaky.
+			for _, dns := range []string{"223.5.5.5:53", "114.114.114.114:53", "8.8.8.8:53"} {
+				c, err := d.DialContext(ctx, "udp", dns)
+				if err == nil {
+					return c, nil
+				}
+				last = err
+			}
+			if last != nil {
+				return nil, last
+			}
+			return d.DialContext(ctx, network, address)
+		},
+	}
+	dialer := &net.Dialer{
+		Timeout:   6 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Resolver:  resolver,
+	}
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   8 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     false, // HTTP/1.1 is more reliable behind flaky CN networks / MITM
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   16,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   8 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 14 * time.Second,
 	}
 	return &Client{
 		http: &http.Client{
 			Transport: transport,
-			Timeout:   30 * time.Second,
+			Timeout:   45 * time.Second,
 		},
 	}
 }
@@ -70,7 +92,7 @@ func WeatherOpts() CompletionOpts {
 	return CompletionOpts{MaxTokens: 220, Timeout: 14 * time.Second, Temperature: 0.7}
 }
 func ChatOpts() CompletionOpts {
-	return CompletionOpts{MaxTokens: 220, Timeout: 18 * time.Second, Temperature: 0.75}
+	return CompletionOpts{MaxTokens: 220, Timeout: 28 * time.Second, Temperature: 0.75}
 }
 func CareVoiceOpts() CompletionOpts {
 	return CompletionOpts{MaxTokens: 320, Timeout: 18 * time.Second, Temperature: 0.85}
@@ -216,6 +238,8 @@ func isRetryableNetErr(err error) bool {
 		"timeout", "timed out", "connection reset", "connection refused",
 		"temporary failure", "tls handshake", "eof", "broken pipe",
 		"i/o timeout", "no such host", "server closed idle connection",
+		"lookup ", "dns", "network is unreachable", "connection aborted",
+		"http2", "stream error", "use of closed network connection",
 	} {
 		if strings.Contains(msg, needle) {
 			return true
@@ -325,7 +349,7 @@ func (c *Client) ChatCompletionEx(
 
 			resp, err := c.http.Do(req)
 			if err != nil {
-				lastErr = fmt.Errorf("网络错误: %w", err)
+				lastErr = fmt.Errorf("网络错误(%s): %w", hostOf(url), err)
 				if isRetryableNetErr(err) && attempt+1 < llmMaxAttempts {
 					nextDelay = retryAfterDelay(nil, attempt)
 					retryTransient = true
@@ -403,3 +427,17 @@ func (c *Client) ChatCompletionEx(
 
 // HTTP returns the shared client for weather/news reuse.
 func (c *Client) HTTP() *http.Client { return c.http }
+
+func hostOf(rawURL string) string {
+	s := strings.TrimSpace(rawURL)
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if i := strings.IndexAny(s, "/?"); i >= 0 {
+		s = s[:i]
+	}
+	if s == "" {
+		return "llm"
+	}
+	return s
+}

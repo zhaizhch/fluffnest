@@ -105,15 +105,22 @@ type LinesResponse struct {
 	Lines []string `json:"lines"`
 }
 
+type ImAttachment struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Mime string `json:"mime,omitempty"`
+}
+
 type ImAgentReplyRequest struct {
-	LLM     LlmSettings   `json:"llm"`
-	Pet     PetInstance   `json:"pet"`
-	History []ChatMessage `json:"history"`
-	Message string        `json:"message"`
-	City    string        `json:"city,omitempty"`
-	PeerID  string        `json:"peerId,omitempty"`
-	Channel string        `json:"channel,omitempty"`
-	Host    any           `json:"host,omitempty"`
+	LLM         LlmSettings    `json:"llm"`
+	Pet         PetInstance    `json:"pet"`
+	History     []ChatMessage  `json:"history"`
+	Message     string         `json:"message"`
+	City        string         `json:"city,omitempty"`
+	PeerID      string         `json:"peerId,omitempty"`
+	Channel     string         `json:"channel,omitempty"`
+	Host        any            `json:"host,omitempty"`
+	Attachments []ImAttachment `json:"attachments,omitempty"`
 }
 
 type ImAgentReplyResponse struct {

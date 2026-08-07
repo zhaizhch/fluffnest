@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fluffnest/deskpet/backend/internal/llm"
@@ -14,21 +17,29 @@ import (
 )
 
 const (
-	MaxCycles      = 6
+	MaxCycles      = 4 // gather → act → finalize; WeChat shouldn't burn 6 LLM RTTs
 	MaxReplyChars  = 600
 	DefaultChannel = "wechat"
 )
 
+// Agent LLM budgets — prefer fewer/faster calls over long thinking.
+var (
+	agentThinkOpts = llm.CompletionOpts{MaxTokens: 380, Timeout: 16 * time.Second, Temperature: 0.45}
+	agentFinalOpts = llm.CompletionOpts{MaxTokens: 420, Timeout: 14 * time.Second, Temperature: 0.5}
+	agentFastOpts  = llm.CompletionOpts{MaxTokens: 280, Timeout: 12 * time.Second, Temperature: 0.55}
+)
+
 // Request is one agent turn from WeChat (or other channel).
 type Request struct {
-	LLM     types.LlmSettings
-	Pet     types.PetInstance
-	History []types.ChatMessage
-	Message string
-	City    string
-	PeerID  string
-	Channel string
-	Host    *HostSnapshot
+	LLM         types.LlmSettings
+	Pet         types.PetInstance
+	History     []types.ChatMessage
+	Message     string
+	City        string
+	PeerID      string
+	Channel     string
+	Host        *HostSnapshot
+	Attachments []types.ImAttachment
 }
 
 // Result is the final user-facing reply plus cycle telemetry.
@@ -90,6 +101,10 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	deps.Pet = req.Pet
 	deps.LLM = rt.LLM
 	deps.LlmCfg = req.LLM
+	deps.Attachments = append([]types.ImAttachment(nil), req.Attachments...)
+	if deps.MediaRoot == "" {
+		deps.MediaRoot = defaultMediaRoot()
+	}
 	if req.Host != nil {
 		deps.Host = &HostBridge{Snapshot: *req.Host}
 	} else {
@@ -98,11 +113,19 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 
 	lastSkills := readLastSkills(rt.Memory, req.PeerID)
 	matched := rt.Catalog.RouteSkills(req.Message, req.History, lastSkills)
+	if len(req.Attachments) > 0 {
+		if docSk, ok := rt.Catalog.FindSkill("documents"); ok {
+			matched = prependSkill(matched, docSk)
+		}
+	}
 	var matchedNames []string
 	var skillBlocks []string
 	for _, sk := range matched {
 		matchedNames = append(matchedNames, sk.Name)
-		skillBlocks = append(skillBlocks, fmt.Sprintf("### Suggested Skill: %s\n%s\n\n%s", sk.Name, sk.Description, sk.Body))
+		skillBlocks = append(skillBlocks, fmt.Sprintf(
+			"### Suggested Skill: %s\n%s\n\n%s",
+			sk.Name, sk.Description, truncateSkillBody(sk.Body),
+		))
 	}
 	if routeNote := FormatRoutedSkills(matched); routeNote != "" {
 		log.Printf("[agent] routed skills=%s peer=%s", routeNote, shortPeer(req.PeerID))
@@ -111,43 +134,37 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	system := rt.buildSystemPrompt(req.Pet, channel, city, skillBlocks)
 	messages := []llm.ChatMessage{{Role: "system", Content: system}}
 
-	if snap := rt.Memory.Snapshot(req.PeerID); snap != "" {
-		messages = append(messages, llm.ChatMessage{
-			Role:    "system",
-			Content: "## Memory Snapshot\n" + snap,
-		})
+	// Core LTM highlights + working memory (thread/digest/notes/recalls).
+	if ess := rt.Memory.EssentialsForPrompt(req.PeerID); ess != "" {
+		messages = append(messages, llm.ChatMessage{Role: "system", Content: ess})
+	}
+	if wm := rt.Memory.WorkingMemoryForPrompt(req.PeerID, req.Message); wm != "" {
+		messages = append(messages, llm.ChatMessage{Role: "system", Content: wm})
 	}
 	if deps.Host != nil {
 		messages = append(messages, llm.ChatMessage{
 			Role: "system",
 			Content: "## Desktop Host State\n" + deps.Host.SnapshotText() +
-				"\n管理提醒/定时推送请用 reminder_* / schedule_*；让桌宠立刻冒泡用 pet_notify。",
+				"\n提醒/定时用 reminder_* / schedule_*；冒泡用 pet_notify。",
+		})
+	}
+	if note := formatAttachmentsNote(req.Attachments); note != "" {
+		messages = append(messages, llm.ChatMessage{
+			Role:    "system",
+			Content: note,
 		})
 	}
 
-	start := 0
-	if len(req.History) > 10 {
-		start = len(req.History) - 10
-	}
-	for _, m := range req.History[start:] {
-		role := "user"
-		if m.Role == "assistant" {
-			role = "assistant"
-		}
-		if strings.TrimSpace(m.Content) == "" {
-			continue
-		}
-		messages = append(messages, llm.ChatMessage{Role: role, Content: m.Content})
-	}
+	messages = append(messages, CompressHistory(req.History)...)
 	messages = append(messages, llm.ChatMessage{
 		Role: "user",
 		Content: fmt.Sprintf(
-			"主人微信消息：%s\n\n请按 Agent Cycle 工作：\n1) 参考已路由的 skills（也可用 load_skill 补载）\n2) 需要事实/时间/计算则调用 tools\n3) 翻译摘要用 rewrite_text；要桌宠冒泡用 pet_notify\n4) 可读写 memory\n5) 产出最终微信回复（不要再调用工具时直接给最终回复文本）",
+			"主人微信：%s\n\n衔接 Working Memory/近期对话。需要事实再调工具（已注入的 skill 勿再 load_skill）。最后直接口语回复。",
 			strings.TrimSpace(req.Message),
 		),
 	})
 
-	opts := llm.CompletionOpts{MaxTokens: 700, Timeout: 28 * time.Second, Temperature: 0.5}
+	fastPath := !needsToolsLikely(matched, req.Message, req.Attachments)
 	tools := toolSpecs()
 	var (
 		toolsUsed  []string
@@ -158,12 +175,51 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 
 	for cycle := 1; cycle <= MaxCycles; cycle++ {
 		trace = append(trace, fmt.Sprintf("cycle_%d_think", cycle))
-		res, err := rt.LLM.ChatCompletionEx(ctx, req.LLM, messages, tools, "auto", opts)
+		opts := agentThinkOpts
+		var toolChoice any = "auto"
+		activeTools := tools
+		switch {
+		case fastPath && cycle == 1 && !usedTool:
+			// Chitchat / follow-up: one shot, no tool RTT.
+			opts = agentFastOpts
+			toolChoice = "none"
+			activeTools = nil
+			trace = append(trace, "fast_path")
+		case usedTool && cycle >= MaxCycles-1:
+			// Force finalize — avoid another tool round near the cap.
+			opts = agentFinalOpts
+			toolChoice = "none"
+			activeTools = nil
+		case usedTool:
+			opts = agentFinalOpts
+		}
+
+		res, err := rt.LLM.ChatCompletionEx(ctx, req.LLM, messages, activeTools, toolChoice, opts)
 		if err != nil {
 			if cycle == 1 {
 				return rt.fallback(ctx, req, deps, city, matchedNames)
 			}
 			return zero, err
+		}
+
+		// Some gateways dump tool XML/DSML into content when tools are disabled.
+		if len(res.ToolCalls) == 0 {
+			if embedded := llm.ParseEmbeddedToolCalls(res.Content); len(embedded) > 0 {
+				res.ToolCalls = embedded
+				trace = append(trace, "recover_embedded_tools")
+			} else if llm.LooksLikeToolLeak(res.Content) && !usedTool && cycle < MaxCycles {
+				fastPath = false
+				messages = append(messages, llm.ChatMessage{
+					Role:    "assistant",
+					Content: res.Content,
+				})
+				messages = append(messages, llm.ChatMessage{
+					Role:    "user",
+					Content: "不要把工具调用写成 XML/DSML 文本。请用正式 tools 调用 web_search 等，再给口语答案。",
+				})
+				trace = append(trace, "retry_after_tool_leak")
+				continue
+			}
 		}
 
 		if len(res.ToolCalls) == 0 {
@@ -174,10 +230,8 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 				}
 				return rt.fallback(ctx, req, deps, city, matchedNames)
 			}
-			_ = rt.Memory.AddSessionNote(req.PeerID, "Q: "+truncateRunes(req.Message, 80))
-			_ = rt.Memory.AddSessionNote(req.PeerID, "A: "+truncateRunes(text, 80))
-			writeLastSkills(rt.Memory, req.PeerID, uniq(skillsUsed))
-			log.Printf("[agent] peer=%s cycles=%d tools=%v skills=%v", shortPeer(req.PeerID), cycle, toolsUsed, skillsUsed)
+			persistTurnAsync(rt.Memory, req.PeerID, req.Message, text, skillsUsed)
+			log.Printf("[agent] peer=%s cycles=%d tools=%v skills=%v fast=%v", shortPeer(req.PeerID), cycle, toolsUsed, skillsUsed, fastPath)
 			return withHost(Result{
 				Text:       text,
 				Cycles:     cycle,
@@ -193,27 +247,128 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 			Content:   res.Content,
 			ToolCalls: res.ToolCalls,
 		})
-		for _, tc := range res.ToolCalls {
-			toolsUsed = append(toolsUsed, tc.Function.Name)
-			trace = append(trace, fmt.Sprintf("cycle_%d_tool:%s", cycle, tc.Function.Name))
-			if tc.Function.Name == "load_skill" {
-				var args map[string]any
-				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-				if name, _ := args["name"].(string); name != "" {
-					skillsUsed = append(skillsUsed, name)
-				}
+		toolResults := runToolsParallel(ctx, deps, res.ToolCalls)
+		for _, tr := range toolResults {
+			toolsUsed = append(toolsUsed, tr.name)
+			trace = append(trace, fmt.Sprintf("cycle_%d_tool:%s", cycle, tr.name))
+			if tr.name == "load_skill" && tr.skillName != "" {
+				skillsUsed = append(skillsUsed, tr.skillName)
 			}
-			out := runTool(ctx, deps, tc)
 			messages = append(messages, llm.ChatMessage{
 				Role:       "tool",
-				ToolCallID: tc.ID,
-				Name:       tc.Function.Name,
-				Content:    out,
+				ToolCallID: tr.id,
+				Name:       tr.name,
+				Content:    tr.content,
 			})
 		}
+		// Nudge model to answer — cuts an extra empty tool-thinking round.
+		messages = append(messages, llm.ChatMessage{
+			Role:    "system",
+			Content: "工具结果已返回。若信息足够，请直接给主人微信口语回复，不要再调工具。",
+		})
 	}
 
 	return rt.synthesize(ctx, req, messages, MaxCycles, toolsUsed, skillsUsed, append(trace, "synthesize"), deps)
+}
+
+type parallelToolResult struct {
+	id        string
+	name      string
+	content   string
+	skillName string
+}
+
+func runToolsParallel(ctx context.Context, deps ToolDeps, calls []llm.ToolCall) []parallelToolResult {
+	out := make([]parallelToolResult, len(calls))
+	if len(calls) == 0 {
+		return out
+	}
+	if len(calls) == 1 {
+		tc := calls[0]
+		var skillName string
+		if tc.Function.Name == "load_skill" {
+			var args map[string]any
+			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			skillName, _ = args["name"].(string)
+		}
+		out[0] = parallelToolResult{
+			id:        tc.ID,
+			name:      tc.Function.Name,
+			content:   TruncateToolResult(tc.Function.Name, runTool(ctx, deps, tc)),
+			skillName: skillName,
+		}
+		return out
+	}
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(i int, tc llm.ToolCall) {
+			defer wg.Done()
+			var skillName string
+			if tc.Function.Name == "load_skill" {
+				var args map[string]any
+				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				skillName, _ = args["name"].(string)
+			}
+			out[i] = parallelToolResult{
+				id:        tc.ID,
+				name:      tc.Function.Name,
+				content:   TruncateToolResult(tc.Function.Name, runTool(ctx, deps, tc)),
+				skillName: skillName,
+			}
+		}(i, tc)
+	}
+	wg.Wait()
+	return out
+}
+
+func persistTurnAsync(mem *Memory, peerID, question, answer string, skills []string) {
+	if mem == nil {
+		return
+	}
+	peerID = strings.TrimSpace(peerID)
+	go func() {
+		_ = mem.RememberTurn(peerID, question, answer)
+		writeLastSkills(mem, peerID, uniq(skills))
+	}()
+}
+
+// needsToolsLikely decides whether this turn should skip the tool-calling path.
+func needsToolsLikely(matched []Skill, message string, atts []types.ImAttachment) bool {
+	if len(atts) > 0 {
+		return true
+	}
+	for _, sk := range matched {
+		switch sk.Name {
+		case "research", "weather-care", "news-digest", "documents", "scheduler",
+			"planner", "lingua", "memory-keeper", "owner-dossier", "self-growth":
+			return true
+		}
+	}
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		return false
+	}
+	low := strings.ToLower(msg)
+	needles := []string{
+		"天气", "气温", "下雨", "新闻", "热点", "头条", "搜索", "查一下", "查下", "查查",
+		"最新", "更新", "几点", "星期", "计算", "多少", "提醒", "定时", "每天",
+		"翻译", "总结", "摘要", "记住", "忘记", "档案",
+		"冠军", "成绩", "结果", "谁赢", "比赛", "决赛", "排名", "积分", "比分",
+		"驿传", "箱根",
+		"forecast", "weather", "news", "search", "translate", "champion", "score",
+		"http://", "https://",
+	}
+	for _, n := range needles {
+		if strings.Contains(low, strings.ToLower(n)) || strings.Contains(msg, n) {
+			return true
+		}
+	}
+	// Fact-seeking questions: has ？/? and is longer than pure chitchat.
+	if (strings.Contains(msg, "？") || strings.Contains(msg, "?")) && runeLen(msg) >= 6 {
+		return true
+	}
+	return false
 }
 
 func withHost(res Result, deps ToolDeps) Result {
@@ -241,9 +396,11 @@ func (rt *Runtime) buildSystemPrompt(pet types.PetInstance, channel, city string
 	if len(skillBlocks) > 0 {
 		b.WriteString("\n\n## Auto-matched Skills for this turn\n")
 		b.WriteString(strings.Join(skillBlocks, "\n\n"))
+		b.WriteString("\n（正文已注入，通常无需再 load_skill）")
 	}
 	b.WriteString("\n\n## Cycle Contract\n")
-	b.WriteString("Observe → (load_skill?) → Tools? → Memory? → Final WeChat reply.\n")
+	b.WriteString("Observe → Working Memory → Tools?(缺事实才调) → 微信口语回复。\n")
+	b.WriteString("已注入 essentials + working memory + 近期对话；够用就直接答，少绕工具圈。\n")
 	b.WriteString("最终回复必须是给主人看的中文口语，不要输出 JSON/工具参数。")
 	return b.String()
 }
@@ -263,7 +420,7 @@ func (rt *Runtime) synthesize(
 			req.Pet.Name, MaxReplyChars, req.Message,
 		),
 	})
-	opts := llm.CompletionOpts{MaxTokens: 700, Timeout: 28 * time.Second, Temperature: 0.5}
+	opts := agentFinalOpts
 	res, err := rt.LLM.ChatCompletionEx(ctx, req.LLM, messages, nil, "", opts)
 	if err != nil {
 		return Result{}, err
@@ -272,7 +429,7 @@ func (rt *Runtime) synthesize(
 	if text == "" {
 		return Result{}, fmt.Errorf("未能整理出回复")
 	}
-	writeLastSkills(rt.Memory, req.PeerID, uniq(skillsUsed))
+	persistTurnAsync(rt.Memory, req.PeerID, req.Message, text, skillsUsed)
 	return withHost(Result{
 		Text:       text,
 		Cycles:     cycles,
@@ -287,11 +444,13 @@ func (rt *Runtime) fallback(ctx context.Context, req Request, deps ToolDeps, cit
 	msgs := []map[string]string{
 		{"role": "system", "content": rt.buildSystemPrompt(req.Pet, DefaultChannel, city, nil) + "\n你必须依据【检索资料】作答。"},
 		{"role": "user", "content": fmt.Sprintf(
-			"主人问：%s\n\n【检索资料】\n%s\n\n【记忆】\n%s\n\n请给出微信回复。",
-			req.Message, briefing, rt.Memory.Snapshot(req.PeerID),
+			"主人问：%s\n\n【检索资料】\n%s\n\n【主人/自我要点】\n%s\n\n【Working Memory】\n%s\n\n请给出微信回复。",
+			req.Message, briefing,
+			rt.Memory.EssentialsForPrompt(req.PeerID),
+			rt.Memory.WorkingMemoryForPrompt(req.PeerID, req.Message),
 		)},
 	}
-	raw, err := rt.LLM.ChatCompletion(ctx, req.LLM, msgs, llm.CompletionOpts{MaxTokens: 700, Timeout: 28 * time.Second, Temperature: 0.5})
+	raw, err := rt.LLM.ChatCompletion(ctx, req.LLM, msgs, agentFinalOpts)
 	if err != nil {
 		return Result{}, err
 	}
@@ -378,4 +537,44 @@ func writeLastSkills(mem *Memory, peerID string, skills []string) {
 		return
 	}
 	_ = mem.Write(peerID, lastSkillsKey, strings.Join(uniq(skills), ","), "agent", false)
+}
+
+func formatAttachmentsNote(atts []types.ImAttachment) string {
+	if len(atts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## 本轮微信附件\n")
+	b.WriteString("请先调用 read_document 读取后再回答。图片/视频暂不支持识读。\n")
+	for i, a := range atts {
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			name = filepath.Base(a.Path)
+		}
+		fmt.Fprintf(&b, "- [%d] %s\n  path: %s\n", i, name, a.Path)
+	}
+	return b.String()
+}
+
+func prependSkill(list []Skill, sk Skill) []Skill {
+	for _, s := range list {
+		if s.Name == sk.Name {
+			return list
+		}
+	}
+	out := make([]Skill, 0, len(list)+1)
+	out = append(out, sk)
+	out = append(out, list...)
+	if len(out) > maxRoutedSkills {
+		out = out[:maxRoutedSkills]
+	}
+	return out
+}
+
+func defaultMediaRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, "Library", "Application Support", "com.fluffnest.deskpet", "wechat-media")
 }

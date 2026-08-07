@@ -320,17 +320,30 @@ func (s *Server) handleImAgentReply(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	out, err := s.agent.Run(r.Context(), agent.Request{
-		LLM:     req.LLM,
-		Pet:     req.Pet,
-		History: req.History,
-		Message: req.Message,
-		City:    city,
-		PeerID:  req.PeerID,
-		Channel: channel,
-		Host:    hostSnap,
+	// Cap wall time below Rust bridge (90s) so we always return something.
+	ctx, cancel := context.WithTimeout(r.Context(), 55*time.Second)
+	defer cancel()
+	out, err := s.agent.Run(ctx, agent.Request{
+		LLM:         req.LLM,
+		Pet:         req.Pet,
+		History:     req.History,
+		Message:     req.Message,
+		City:        city,
+		PeerID:      req.PeerID,
+		Channel:     channel,
+		Host:        hostSnap,
+		Attachments: req.Attachments,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			log.Printf("[agent] reply deadline: %v", err)
+			writeJSON(w, http.StatusOK, types.ImAgentReplyResponse{
+				Text:   "这题我卡了一下，你再发一次或把问题缩短一点，我马上接上～",
+				Cycles: 0,
+				Trace:  []string{"deadline"},
+			})
+			return
+		}
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}

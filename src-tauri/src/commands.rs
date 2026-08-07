@@ -576,6 +576,7 @@ pub fn apply_host_actions(app: &AppHandle, actions: &[Value]) -> Vec<String> {
                     .map(|s| s.to_string()),
                 message_id: None,
                 auto_replying: None,
+                channel: None,
             });
             notes.push(format!("已通知桌宠冒泡：{}", truncate_chars(&text, 40)));
             continue;
@@ -745,6 +746,7 @@ pub async fn chat_with_pet(
             detail: None,
             message_id: None,
             auto_replying: None,
+            channel: None,
         },
     );
 
@@ -852,6 +854,7 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
                         detail: None,
                         message_id: None,
                         auto_replying: None,
+                        channel: None,
                     };
                     let _ = app.emit("pet-says", payload.clone());
                     let _ = app.emit("proactive-message", payload.clone());
@@ -899,6 +902,7 @@ pub fn run_proactive(app: &AppHandle, kind: &str) -> Result<crate::llm::PetSaysP
         detail,
         message_id: None,
         auto_replying: None,
+        channel: None,
     };
     let _ = app.emit("pet-says", payload.clone());
     let _ = app.emit("proactive-message", payload.clone());
@@ -1035,6 +1039,7 @@ pub fn simulate_im_message(
             source: "simulate".into(),
             sender: sender.unwrap_or_else(|| "测试好友".into()),
             text: text.unwrap_or_else(|| "明天下午三点开会，别忘了".into()),
+            attachments: vec![],
             context_token: None,
             peer_user_id: None,
         },

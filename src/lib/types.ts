@@ -189,11 +189,18 @@ export type WechatAuth = {
   ownerContextToken?: string | null;
 };
 
+export type ImAttachment = {
+  path: string;
+  name: string;
+  mime?: string | null;
+};
+
 export type ImMessage = {
   id: string;
   source: string;
   sender: string;
   text: string;
+  attachments?: ImAttachment[];
   summary?: string | null;
   urgency?: string | null;
   contextToken?: string | null;
@@ -272,6 +279,8 @@ export type PetSaysPayload = {
   messageId?: string | null;
   /** ClawBot will auto-send; skip parallel draft */
   autoReplying?: boolean | null;
+  /** IM channel, e.g. clawbot — skip draft suggestion popup */
+  channel?: string | null;
 };
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {

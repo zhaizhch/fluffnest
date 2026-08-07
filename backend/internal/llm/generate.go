@@ -475,6 +475,12 @@ func (c *Client) GenerateImSuggest(ctx context.Context, llm types.LlmSettings, p
 		msg("user", user),
 	}, opts)
 	if err != nil {
+		// Network blips shouldn't blank the UI — return usable local drafts.
+		if isRetryableNetErr(err) || strings.Contains(err.Error(), "网络错误") {
+			fb := fallbackImSuggest(text)
+			fb.Summary = CleanLine("（离线兜底）"+fb.Summary, 48)
+			return fb, nil
+		}
 		return empty, err
 	}
 	trimmed := strings.TrimSpace(raw)
@@ -516,4 +522,21 @@ func (c *Client) GenerateImSuggest(ctx context.Context, llm types.LlmSettings, p
 		out.Suggestions = []string{out.Draft}
 	}
 	return out, nil
+}
+
+func fallbackImSuggest(text string) types.ImSuggestResponse {
+	snippet := CleanLine(text, 18)
+	draft := "收到，我稍后回复你～"
+	if snippet != "" {
+		draft = "收到啦，我看一下再回你～"
+	}
+	return types.ImSuggestResponse{
+		Summary: CleanLine(text, 40),
+		Suggestions: []string{
+			draft,
+			"好的，没问题。",
+			"稍等，我这边确认一下再告诉你。",
+		},
+		Draft: draft,
+	}
 }

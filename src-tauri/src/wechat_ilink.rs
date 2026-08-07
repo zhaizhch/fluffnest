@@ -11,7 +11,10 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 
 const DEFAULT_BASE: &str = "https://ilinkai.weixin.qq.com";
+const CDN_BASE: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
 const CHANNEL_VERSION: &str = "1.0.2";
+/// Soft limit for decrypted inbound files (bytes).
+const MAX_MEDIA_BYTES: usize = 10 * 1024 * 1024;
 
 static POLLER_STOP: AtomicBool = AtomicBool::new(false);
 static POLLER_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -70,6 +73,8 @@ struct UpdatesResp {
 #[derive(Debug, Deserialize)]
 struct WeixinMessage {
     #[serde(default)]
+    message_id: i64,
+    #[serde(default)]
     from_user_id: String,
     #[serde(default)]
     message_type: i64,
@@ -87,12 +92,73 @@ struct MessageItem {
     r#type: i64,
     #[serde(default)]
     text_item: Option<TextItem>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    image_item: Option<ImageItem>,
+    #[serde(default)]
+    voice_item: Option<VoiceItem>,
+    #[serde(default)]
+    file_item: Option<FileItem>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    video_item: Option<VideoItem>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TextItem {
     #[serde(default)]
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImageItem {
+    #[serde(default)]
+    #[allow(dead_code)]
+    media: Option<CdnMedia>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    aeskey: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VoiceItem {
+    #[serde(default)]
+    #[allow(dead_code)]
+    media: Option<CdnMedia>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileItem {
+    #[serde(default)]
+    media: Option<CdnMedia>,
+    #[serde(default)]
+    file_name: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    md5: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    len: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VideoItem {
+    #[serde(default)]
+    #[allow(dead_code)]
+    media: Option<CdnMedia>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CdnMedia {
+    #[serde(default)]
+    encrypt_query_param: String,
+    #[serde(default)]
+    aes_key: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    encrypt_type: i64,
 }
 
 fn http_client() -> Result<&'static reqwest::blocking::Client, String> {
@@ -328,14 +394,22 @@ fn start_poller(app: AppHandle) {
         return;
     }
     POLLER_STOP.store(false, Ordering::SeqCst);
+    eprintln!("[wechat_ilink] poller started");
     std::thread::spawn(move || {
+        let mut ticks: u64 = 0;
         while !POLLER_STOP.load(Ordering::SeqCst) {
+            ticks += 1;
             if let Err(e) = poll_once(&app) {
                 eprintln!("[wechat_ilink] poll: {e}");
                 std::thread::sleep(std::time::Duration::from_secs(3));
             }
+            // Heartbeat so we can tell the poller is still alive (long-poll is otherwise silent).
+            if ticks == 1 || ticks % 20 == 0 {
+                eprintln!("[wechat_ilink] poller alive ticks={ticks}");
+            }
         }
         POLLER_RUNNING.store(false, Ordering::SeqCst);
+        eprintln!("[wechat_ilink] poller stopped");
     });
 }
 
@@ -386,20 +460,6 @@ fn poll_once(app: &AppHandle) -> Result<(), String> {
         if msg.message_type != 1 {
             continue;
         }
-        let text = msg
-            .item_list
-            .iter()
-            .find_map(|i| {
-                if i.r#type == 1 {
-                    i.text_item.as_ref().map(|t| t.text.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
-        if text.trim().is_empty() {
-            continue;
-        }
         let context_token = msg.context_token.trim().to_string();
         if context_token.is_empty() || msg.from_user_id.trim().is_empty() {
             eprintln!(
@@ -408,6 +468,12 @@ fn poll_once(app: &AppHandle) -> Result<(), String> {
             );
             continue;
         }
+
+        let (text, attachments) = extract_inbound_content(app, &msg);
+        if text.trim().is_empty() && attachments.is_empty() {
+            continue;
+        }
+
         let sender = if msg.group_id.is_empty() {
             short_user_id(&msg.from_user_id)
         } else {
@@ -419,12 +485,234 @@ fn poll_once(app: &AppHandle) -> Result<(), String> {
                 source: "clawbot".into(),
                 sender,
                 text,
+                attachments,
                 context_token: Some(context_token),
                 peer_user_id: Some(msg.from_user_id),
             },
         );
     }
     Ok(())
+}
+
+/// Pull text + downloadable files from an inbound WeixinMessage.
+fn extract_inbound_content(
+    app: &AppHandle,
+    msg: &WeixinMessage,
+) -> (String, Vec<crate::state::ImAttachment>) {
+    use crate::state::ImAttachment;
+
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut attachments: Vec<ImAttachment> = Vec::new();
+    let mut unsupported_media = false;
+
+    for item in &msg.item_list {
+        match item.r#type {
+            1 => {
+                if let Some(t) = item.text_item.as_ref() {
+                    let s = t.text.trim();
+                    if !s.is_empty() {
+                        text_parts.push(s.to_string());
+                    }
+                }
+            }
+            2 => {
+                // Images: no OCR this round.
+                unsupported_media = true;
+            }
+            3 => {
+                if let Some(v) = item.voice_item.as_ref() {
+                    let s = v.text.trim();
+                    if !s.is_empty() {
+                        text_parts.push(s.to_string());
+                    }
+                }
+            }
+            4 => {
+                if let Some(f) = item.file_item.as_ref() {
+                    match download_file_item(app, msg, f) {
+                        Ok(att) => {
+                            text_parts.push(format!("[文件] {}", att.name));
+                            attachments.push(att);
+                        }
+                        Err(e) => {
+                            let name = if f.file_name.trim().is_empty() {
+                                "未知文件".into()
+                            } else {
+                                f.file_name.trim().to_string()
+                            };
+                            eprintln!("[wechat_ilink] file download failed ({name}): {e}");
+                            text_parts.push(format!("[文件] {name}（下载失败：{e}）"));
+                        }
+                    }
+                }
+            }
+            5 => {
+                unsupported_media = true;
+            }
+            _ => {}
+        }
+    }
+
+    if text_parts.is_empty() && unsupported_media && attachments.is_empty() {
+        text_parts.push("收到图片/视频，暂不支持识读，请发 PDF、Word、txt 或 md 文件。".into());
+    }
+
+    (text_parts.join("\n"), attachments)
+}
+
+fn download_file_item(
+    app: &AppHandle,
+    msg: &WeixinMessage,
+    file: &FileItem,
+) -> Result<crate::state::ImAttachment, String> {
+    let media = file
+        .media
+        .as_ref()
+        .ok_or_else(|| "缺少 file media".to_string())?;
+    let param = media.encrypt_query_param.trim();
+    if param.is_empty() {
+        return Err("缺少 encrypt_query_param".into());
+    }
+    let key = decode_aes_key(&media.aes_key)?;
+    let cipher = cdn_download(param)?;
+    if cipher.len() > MAX_MEDIA_BYTES + 64 {
+        return Err(format!(
+            "文件过大（{} bytes，上限 {}）",
+            cipher.len(),
+            MAX_MEDIA_BYTES
+        ));
+    }
+    let plain = aes128_ecb_decrypt(&cipher, &key)?;
+    if plain.len() > MAX_MEDIA_BYTES {
+        return Err(format!(
+            "文件过大（{} bytes，上限 {}）",
+            plain.len(),
+            MAX_MEDIA_BYTES
+        ));
+    }
+
+    let safe_name = sanitize_filename(&file.file_name);
+    let id_part = if msg.message_id != 0 {
+        msg.message_id.to_string()
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
+    let dir = media_dir(app)?;
+    let path = dir.join(format!("{id_part}_{safe_name}"));
+    std::fs::write(&path, &plain).map_err(|e| format!("写入失败: {e}"))?;
+    Ok(crate::state::ImAttachment {
+        path: path.to_string_lossy().to_string(),
+        name: if file.file_name.trim().is_empty() {
+            safe_name.clone()
+        } else {
+            file.file_name.trim().to_string()
+        },
+        mime: guess_mime(&safe_name),
+    })
+}
+
+fn media_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("wechat-media");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建媒体目录失败: {e}"))?;
+    Ok(dir)
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let base = name
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("file.bin")
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect::<String>();
+    let trimmed = base.trim().trim_start_matches('.');
+    if trimmed.is_empty() {
+        "file.bin".into()
+    } else if trimmed.chars().count() > 120 {
+        trimmed.chars().take(120).collect()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn guess_mime(name: &str) -> Option<String> {
+    let lower = name.to_lowercase();
+    if lower.ends_with(".pdf") {
+        Some("application/pdf".into())
+    } else if lower.ends_with(".docx") {
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document".into())
+    } else if lower.ends_with(".txt") {
+        Some("text/plain".into())
+    } else if lower.ends_with(".md") || lower.ends_with(".markdown") {
+        Some("text/markdown".into())
+    } else {
+        None
+    }
+}
+
+fn cdn_download(encrypt_query_param: &str) -> Result<Vec<u8>, String> {
+    let client = http_client()?;
+    let url = format!("{CDN_BASE}/download?encrypted_query_param={encrypt_query_param}");
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .map_err(|e| format!("CDN 下载失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("CDN 下载失败: HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .map_err(|e| format!("读取 CDN 响应失败: {e}"))?;
+    Ok(bytes.to_vec())
+}
+
+/// Decode iLink AES key: base64(raw16) or base64(hex32) or bare hex32.
+fn decode_aes_key(raw: &str) -> Result<[u8; 16], String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err("缺少 aes_key".into());
+    }
+    if let Ok(bytes) = B64.decode(s.as_bytes()) {
+        if bytes.len() == 16 {
+            let mut out = [0u8; 16];
+            out.copy_from_slice(&bytes);
+            return Ok(out);
+        }
+        // base64(hex string of 32 chars) → 16 bytes
+        if bytes.len() == 32 && bytes.iter().all(|b| b.is_ascii_hexdigit()) {
+            let hex_str = String::from_utf8_lossy(&bytes);
+            let decoded = hex::decode(hex_str.as_ref())
+                .map_err(|e| format!("aes_key hex 解析失败: {e}"))?;
+            if decoded.len() == 16 {
+                let mut out = [0u8; 16];
+                out.copy_from_slice(&decoded);
+                return Ok(out);
+            }
+        }
+    }
+    if s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let decoded = hex::decode(s).map_err(|e| format!("aes_key hex 解析失败: {e}"))?;
+        if decoded.len() == 16 {
+            let mut out = [0u8; 16];
+            out.copy_from_slice(&decoded);
+            return Ok(out);
+        }
+    }
+    Err("无法解析 aes_key（期望 16 字节）".into())
+}
+
+fn aes128_ecb_decrypt(cipher: &[u8], key: &[u8; 16]) -> Result<Vec<u8>, String> {
+    crate::aes_ecb::aes128_ecb_decrypt(cipher, key)
 }
 
 fn short_user_id(id: &str) -> String {

@@ -3,10 +3,10 @@
 //! The sidecar owns LLM / weather / news / fortune network work. Rust keeps
 //! Tauri shell duties and persists app state.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 static BRIDGE: OnceLock<Mutex<GoBridge>> = OnceLock::new();
@@ -21,11 +21,20 @@ struct GoBridge {
 impl GoBridge {
     fn ensure_running(&mut self) -> Result<(), String> {
         if self.child.as_mut().map(|c| c.try_wait().ok().flatten().is_none()) == Some(true)
+            && !self.base_url.is_empty()
             && health_ok(&self.http, &self.base_url)
         {
             return Ok(());
         }
-        self.restart()
+        // One retry: hot-reload / leftover kills often fail the first spawn.
+        match self.restart() {
+            Ok(()) => Ok(()),
+            Err(first) => {
+                eprintln!("[fluffnest] Go AI sidecar first start failed: {first}; retrying…");
+                std::thread::sleep(Duration::from_millis(200));
+                self.restart().map_err(|second| format!("{second}（初次失败：{first}）"))
+            }
+        }
     }
 
     fn restart(&mut self) -> Result<(), String> {
@@ -33,6 +42,8 @@ impl GoBridge {
             let _ = child.kill();
             let _ = child.wait();
         }
+        self.base_url.clear();
+
         let bin = resolve_sidecar_bin()?;
         let mut child = Command::new(&bin)
             .arg("--addr")
@@ -47,39 +58,70 @@ impl GoBridge {
             .stdout
             .take()
             .ok_or_else(|| "Go AI 服务无 stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "Go AI 服务无 stderr".to_string())?;
+
+        let err_buf = Arc::new(Mutex::new(String::new()));
+        let err_buf_bg = Arc::clone(&err_buf);
+        std::thread::spawn(move || {
+            let mut r = BufReader::new(stderr);
+            let mut line = String::new();
+            while r.read_line(&mut line).ok().unwrap_or(0) > 0 {
+                eprint!("[fluffnest-ai] {line}");
+                if let Ok(mut g) = err_buf_bg.lock() {
+                    if g.len() < 4000 {
+                        g.push_str(&line);
+                    }
+                }
+                line.clear();
+            }
+        });
+
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let addr = loop {
             if Instant::now() > deadline {
-                let _ = child.kill();
-                return Err("Go AI 服务启动超时".into());
+                let detail = take_err(&err_buf);
+                let status = reap(&mut child);
+                return Err(format!(
+                    "Go AI 服务启动超时{status}{detail}"
+                ));
             }
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) => {
-                    let _ = child.kill();
-                    return Err("Go AI 服务意外退出".into());
+                    // Give stderr drain a moment to capture the fatal log line.
+                    std::thread::sleep(Duration::from_millis(50));
+                    let detail = take_err(&err_buf);
+                    let status = reap(&mut child);
+                    return Err(format!(
+                        "Go AI 服务意外退出{status}{detail}"
+                    ));
                 }
                 Ok(_) => {
                     let t = line.trim();
                     if let Some(rest) = t.strip_prefix("FLUFFNEST_AI_READY ") {
                         break rest.trim().to_string();
                     }
+                    // Ignore unrelated stdout lines.
                 }
                 Err(e) => {
-                    let _ = child.kill();
-                    return Err(format!("读取 Go AI 就绪信号失败: {e}"));
+                    let detail = take_err(&err_buf);
+                    let status = reap(&mut child);
+                    return Err(format!(
+                        "读取 Go AI 就绪信号失败: {e}{status}{detail}"
+                    ));
                 }
             }
         };
 
-        // Drain remaining stdout on a side thread so the pipe never blocks.
+        // Drain remaining stdout so the pipe never blocks.
         std::thread::spawn(move || {
-            let mut sink = String::new();
-            while reader.read_line(&mut sink).ok().unwrap_or(0) > 0 {
-                sink.clear();
-            }
+            let mut sink = Vec::new();
+            let _ = reader.read_to_end(&mut sink);
         });
 
         self.base_url = format!("http://{addr}");
@@ -90,9 +132,44 @@ impl GoBridge {
             if health_ok(&self.http, &self.base_url) {
                 return Ok(());
             }
+            // If child already died, fail fast with stderr.
+            if let Some(c) = self.child.as_mut() {
+                if let Ok(Some(status)) = c.try_wait() {
+                    let detail = take_err(&err_buf);
+                    self.child = None;
+                    self.base_url.clear();
+                    return Err(format!(
+                        "Go AI 服务在就绪后退出 ({status}){detail}"
+                    ));
+                }
+            }
             std::thread::sleep(Duration::from_millis(40));
         }
-        Err("Go AI 服务健康检查失败".into())
+        let detail = take_err(&err_buf);
+        Err(format!(
+            "Go AI 服务健康检查失败 (url={}){detail}",
+            self.base_url
+        ))
+    }
+}
+
+fn take_err(buf: &Arc<Mutex<String>>) -> String {
+    let s = buf
+        .lock()
+        .map(|g| g.trim().to_string())
+        .unwrap_or_default();
+    if s.is_empty() {
+        String::new()
+    } else {
+        format!("；日志：{s}")
+    }
+}
+
+fn reap(child: &mut Child) -> String {
+    let _ = child.kill();
+    match child.wait() {
+        Ok(status) => format!(" ({status})"),
+        Err(_) => String::new(),
     }
 }
 
@@ -114,6 +191,24 @@ fn resolve_sidecar_bin() -> Result<PathBuf, String> {
 
     let triple = current_target_triple();
     let names = [format!("fluffnest-ai-{triple}"), "fluffnest-ai".into()];
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // Prefer src-tauri/binaries over next-to-exe: `npm run build:go` may overwrite
+    // target/debug/fluffnest-ai while an old sidecar still holds the vnode; macOS
+    // then SIGKILLs subsequent execs of that path.
+    let stable = [
+        manifest.join("binaries").join(format!("fluffnest-ai-{triple}")),
+        manifest.join("binaries").join("fluffnest-ai"),
+        manifest.join("../backend/bin").join("fluffnest-ai"),
+        manifest
+            .join("../backend/bin")
+            .join(format!("fluffnest-ai-{triple}")),
+    ];
+    for c in &stable {
+        if c.is_file() {
+            return Ok(c.canonicalize().unwrap_or_else(|_| c.clone()));
+        }
+    }
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -131,21 +226,6 @@ fn resolve_sidecar_bin() -> Result<PathBuf, String> {
                     }
                 }
             }
-        }
-    }
-
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidates = [
-        manifest.join("binaries").join(format!("fluffnest-ai-{triple}")),
-        manifest.join("binaries").join("fluffnest-ai"),
-        manifest.join("../backend/bin").join("fluffnest-ai"),
-        manifest
-            .join("../backend/bin")
-            .join(format!("fluffnest-ai-{triple}")),
-    ];
-    for c in candidates {
-        if c.is_file() {
-            return Ok(c.canonicalize().unwrap_or(c));
         }
     }
 
@@ -203,6 +283,7 @@ pub fn shutdown() {
             let _ = child.kill();
             let _ = child.wait();
         }
+        g.base_url.clear();
     }
 }
 
