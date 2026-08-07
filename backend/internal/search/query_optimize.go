@@ -1,8 +1,10 @@
 package search
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // OptimizedQuery is a search-ready rewrite of the user's raw question.
@@ -108,8 +110,23 @@ func OptimizeQuery(raw, kind string) OptimizedQuery {
 		addCN(compactNewsCN(core))
 	}
 
-	// Intent-specific shaping for awards / rosters / winners.
+	// Intent-specific shaping for awards / rosters / winners / current events.
 	shapeIntentQueries(core, kind, addCN, addIntl)
+
+	// Freshness: pin calendar year on news queries (CN + intl).
+	if kind == "news" {
+		year := fmt.Sprintf("%d", time.Now().Year())
+		if len(out.CN) > 0 {
+			addCN(out.CN[0] + " " + year)
+		} else {
+			addCN(core + " " + year)
+		}
+		if len(out.Intl) > 0 {
+			addIntl(out.Intl[0] + " " + year)
+		} else if en := firstAliasEN(core); en != "" {
+			addIntl(en + " " + year)
+		}
+	}
 
 	if len(out.CN) == 0 {
 		addCN(core)
@@ -125,25 +142,12 @@ func OptimizeQuery(raw, kind string) OptimizedQuery {
 		}
 	}
 
-	out.CN = capStrings(out.CN, 4)
-	out.Intl = capStrings(out.Intl, 4)
-	return out
-}
-
-// All returns unique CN∪Intl terms (legacy ExpandQueries shape).
-func (o OptimizedQuery) All() []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, xs := range [][]string{o.CN, o.Intl} {
-		for _, s := range xs {
-			k := strings.ToLower(strings.TrimSpace(s))
-			if k == "" || seen[k] {
-				continue
-			}
-			seen[k] = true
-			out = append(out, s)
-		}
+	limit := 4
+	if kind == "news" {
+		limit = 5
 	}
+	out.CN = capStrings(out.CN, limit)
+	out.Intl = capStrings(out.Intl, limit)
 	return out
 }
 
@@ -192,6 +196,26 @@ func shapeIntentQueries(core, kind string, addCN, addIntl func(string)) {
 	}
 
 	switch {
+	case has("山神", "山の神", "yamanokami"):
+		addCN("箱根驿传 山神")
+		addCN("箱根駅伝 山の神 5区")
+		addIntl("Hakone Ekiden 山の神")
+		addIntl("箱根駅伝 5区 山の神")
+		if strings.Contains(blob, "黑田") || strings.Contains(blob, "黒田") {
+			addCN("黑田朝日 山神")
+			addIntl("黒田朝日 山の神")
+			addIntl("Kuroda Asahi Hakone")
+		}
+	case has("世界杯", "world cup"):
+		addCN(baseCN + " 世界杯")
+		addIntl(strings.TrimSpace(baseEN + " World Cup"))
+		if has("哈兰德", "Haaland") {
+			addIntl("Haaland World Cup Norway")
+			addCN("哈兰德 世界杯 挪威")
+		}
+	case has("入选", "国家队", "national team", "squad"):
+		addCN(baseCN + " 入选")
+		addIntl(strings.TrimSpace(baseEN + " national team squad"))
 	case has("区间赏", "区間賞", "section award"):
 		addCN(baseCN + " 区间赏")
 		addCN(baseJP + " 区間賞")
@@ -221,6 +245,8 @@ func stripIntentNoise(s string) string {
 		"名单", "", "选手", "",
 		"冠军", "", "成绩", "", "结果", "",
 		"最新", "", "新料", "", "更新", "",
+		"山神", "", "山の神", "",
+		"世界杯", "", "入选", "",
 	)
 	return strings.Join(strings.Fields(r.Replace(s)), " ")
 }

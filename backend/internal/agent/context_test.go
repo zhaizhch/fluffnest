@@ -18,8 +18,7 @@ func TestEssentialsForPromptExcludesFullMemoryDump(t *testing.T) {
 	peer := "p1"
 	_ = m.OwnerUpdateField(peer, "identity", "nickname", "志成")
 	_ = m.Write(peer, "hobby", "星露谷", "test", false)
-	_ = m.AddSessionNote(peer, "Q: 很久以前的闲聊")
-	_ = m.AddSessionNote(peer, "A: 很长的回复内容不应该进 essentials")
+	_ = m.RememberTurn(peer, "很久以前的闲聊", "很长的回复内容不应该进 essentials")
 
 	ess := m.EssentialsForPrompt(peer)
 	if !strings.Contains(ess, "志成") {

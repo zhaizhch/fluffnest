@@ -387,10 +387,10 @@ func (c *Client) ChatCompletionEx(
 				// Empty text with no tool calls — bump token budget (thinking ate it) and retry.
 				if content == "" && len(msg.ToolCalls) == 0 && attempt+1 < llmMaxAttempts {
 					lastErr = fmt.Errorf("LLM 返回空内容")
-					if maxTokens < 480 {
+					if maxTokens < 900 {
 						maxTokens = maxTokens * 2
-						if maxTokens > 480 {
-							maxTokens = 480
+						if maxTokens > 900 {
+							maxTokens = 900
 						}
 					}
 					nextDelay = retryAfterDelay(nil, attempt)

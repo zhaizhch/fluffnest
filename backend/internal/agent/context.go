@@ -25,7 +25,7 @@ const (
 
 	toolResultRunes    = 1800
 	skillBodyRunes     = 280
-	essentialsRunes    = 700
+	essentialsRunes    = 900
 	workingMemoryRunes = 1400
 
 	sessionNoteRunes   = 240
@@ -148,6 +148,13 @@ func normalizeHistory(history []types.ChatMessage) []types.ChatMessage {
 		role := m.Role
 		if role != "assistant" {
 			role = "user"
+		} else {
+			// Drop poisoned assistant turns (DSML leaks / mid-thought stalls) so
+			// multi-turn chat doesn't keep teaching the model to leak.
+			c = llm.CleanWechatReply(c, historyFullMsgRunes)
+			if c == "" || llm.LooksIncompleteReply(c) {
+				continue
+			}
 		}
 		clean = append(clean, types.ChatMessage{Role: role, Content: c})
 	}
@@ -213,6 +220,9 @@ func TruncateToolResult(name, content string) string {
 		limit = 1600
 	case "web_search", "get_news":
 		limit = 1800
+	case "multi_agent_run", "agent_board_read", "agent_board_post",
+		"agent_chat", "agent_send", "agent_broadcast", "team_status":
+		limit = 3200
 	}
 	if utf8.RuneCountInString(content) <= limit {
 		return content
@@ -252,18 +262,6 @@ func (m *Memory) RememberTurn(peerID, question, answer string) error {
 	}
 	sess.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	m.Sessions[peerID] = sess
-	return m.refinePeerKnowledgeLocked(peerID)
-}
-
-// RefinePeerKnowledge folds old session notes into an episodic digest and
-// drops answered open questions.
-func (m *Memory) RefinePeerKnowledge(peerID string) error {
-	peerID = strings.TrimSpace(peerID)
-	if peerID == "" || m == nil {
-		return nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	return m.refinePeerKnowledgeLocked(peerID)
 }
 

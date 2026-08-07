@@ -43,13 +43,14 @@ Bundled under `internal/agent/skills/*/SKILL.md`:
 | `self-growth` | Agent self-improvement log |
 | `scheduler` | Care reminders + timed WeChat/pet pushes |
 | `planner` | Break down goals / todos / next steps |
+| `multi-agent` | Main agent convenes specialists + shared board for decisions |
 | `clarify` | Ambiguous asks → one sharp question or stated assumption |
 
 Skills are routed via `RouteSkills`: trigger match → follow-up continuity (`last_skills` + history) → soft description score → clarify for vague shorts.
 
 ## Tools
 
-- `web_search` — 国内+国外并行（Bing/搜狗微信 ∥ Bing/DDG/百科/Google News）后合并；每次先优化原问题为 CN+intl 检索词；`type=news|web`
+- `web_search` — 国内/国际双 agent 并行（够用即停）；scope=cn|intl|both；启发式优化 CN+intl 词；`type=news|web`。时事类会在 prompt/记忆组装同时预取。
 - `get_weather` / `get_news` — weather supports `forTomorrow` / `dayOffset`
 - `get_local_time` — local date/time/weekday/timezone
 - `calc` — safe arithmetic
@@ -60,6 +61,9 @@ Skills are routed via `RouteSkills`: trigger match → follow-up continuity (`la
 - `memory_read` / `memory_write` / `memory_delete` / `memory_list` / `memory_search`
 - `owner_dossier_get` / `owner_dossier_update` / `owner_dossier_note`
 - `self_dossier_get` / `self_dossier_update` / `self_dossier_log`
+- `multi_agent_run` — 组建持久 Crew（concurrent|sequential|handoff）；子 Agent 有 messages+inbox
+- `agent_send` / `agent_broadcast` / `agent_chat` / `team_status` — 团队通信与续聊（keep_alive）
+- `agent_board_post` / `agent_board_read` — 共享白板
 - `load_skill` / `list_skills`
 - `reminder_list` / `reminder_set` / `reminder_cancel`
 - `schedule_list` / `schedule_upsert` / `schedule_cancel`
@@ -97,6 +101,8 @@ Store shape:
 - **self** — agent self-improvement dossier
 
 Do **not** dump the whole knowledge base into every prompt. History compression keeps recent messages readable and rolls older chat into an episodic summary (not ultra-short stubs).
+
+**Auto harvest:** WeChat chitchat that states personal facts (likes, city, job, family, sleep, goals, boundaries…) is parsed into the owner dossier every turn—even on fast-path—so later questions can answer from Essentials without re-asking.
 
 ## Extending
 

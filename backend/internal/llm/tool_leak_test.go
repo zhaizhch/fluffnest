@@ -32,3 +32,29 @@ func TestCleanWechatReplyDropsToolLeak(t *testing.T) {
 		t.Fatalf("expected empty, got %q", out)
 	}
 }
+
+func TestCleanWechatReplyDropsEmptyDSMLTokens(t *testing.T) {
+	raw := `<｜｜｜｜> <｜｜｜｜>`
+	if !LooksLikeToolLeak(raw) {
+		t.Fatal("expected leak detect for empty DSML tokens")
+	}
+	out := CleanWechatReply(raw, 200)
+	if out != "" {
+		t.Fatalf("expected empty, got %q", out)
+	}
+}
+
+func TestLooksIncompleteStall(t *testing.T) {
+	if !LooksIncompleteReply("主人别急，卡卡这就") {
+		t.Fatal("expected incomplete stall")
+	}
+	if !LooksIncompleteReply("稍等，我这边") {
+		t.Fatal("expected incomplete trailing comma/connector")
+	}
+	if LooksIncompleteReply("青山学院赢了，区间赏稍后再细说。") {
+		t.Fatal("complete reply should pass")
+	}
+	if CleanWechatReply("主人别急，卡卡这就", 200) != "" {
+		t.Fatal("CleanWechatReply should drop stall")
+	}
+}

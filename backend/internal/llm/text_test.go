@@ -27,3 +27,22 @@ func TestRecoverSpeakableLastLine(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestTruncateAtSentence(t *testing.T) {
+	s := "青山学院赢了。区间赏方面一区是某某，二区还没说完就被切"
+	got := TruncateAtSentence(s, 20)
+	if !strings.HasSuffix(got, "，") && !strings.HasSuffix(got, "。") {
+		t.Fatalf("expected punct end, got %q", got)
+	}
+	if strings.HasSuffix(got, "二区") || strings.Contains(got, "还没说完") {
+		t.Fatalf("should not keep incomplete tail: %q", got)
+	}
+}
+
+func TestCleanWechatReplySentenceTrim(t *testing.T) {
+	raw := "结论是青山赢了。后面这句很长很长很长很长很长很长会被裁掉到半截"
+	got := CleanWechatReply(raw, 24)
+	if got != "结论是青山赢了。" {
+		t.Fatalf("got %q", got)
+	}
+}

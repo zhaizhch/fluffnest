@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -359,7 +359,7 @@ export function PetApp() {
       const [pos, scale, mon, size] = await Promise.all([
         win.outerPosition(),
         win.scaleFactor(),
-        win.currentMonitor(),
+        currentMonitor(),
         win.outerSize(),
       ]);
       const logicalX = pos.x / scale;
@@ -406,7 +406,7 @@ export function PetApp() {
       const [pos, scale, mon, size] = await Promise.all([
         win.outerPosition(),
         win.scaleFactor(),
-        win.currentMonitor(),
+        currentMonitor(),
         win.outerSize(),
       ]);
       const logicalX = pos.x / scale;

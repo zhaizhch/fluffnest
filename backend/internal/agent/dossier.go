@@ -270,31 +270,6 @@ func (m *Memory) OwnerAppendNote(peerID, note string) error {
 	return m.saveLocked()
 }
 
-// OwnerSetOpenQuestions replaces remaining questions to learn.
-func (m *Memory) OwnerSetOpenQuestions(peerID string, qs []string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	peerID = strings.TrimSpace(peerID)
-	if peerID == "" {
-		peerID = "_default"
-	}
-	d := m.getOwnerLocked(peerID)
-	clean := make([]string, 0, len(qs))
-	for _, q := range qs {
-		q = strings.TrimSpace(q)
-		if q != "" {
-			clean = append(clean, truncateRunes(q, 120))
-		}
-	}
-	if len(clean) > 16 {
-		clean = clean[:16]
-	}
-	d.OpenQuestions = clean
-	d.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	m.OwnerProfiles[peerID] = d
-	return m.saveLocked()
-}
-
 func (m *Memory) SelfUpdateField(section, key, value string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -452,11 +427,30 @@ func (m *Memory) DossierBrief(peerID string) string {
 	}
 	addHL("称呼", firstMap(owner.Identity, "nickname", "name", "call_me"))
 	addHL("城市", firstMap(owner.Identity, "home_city", "city"))
-	addHL("工作", firstMap(owner.Work, "role", "focus", "project"))
+	addHL("生日", firstMap(owner.Identity, "birthday"))
+	addHL("工作", firstNonEmpty(
+		firstMap(owner.Work, "role", "focus", "project"),
+		firstMap(owner.Work, "company", "school"),
+	))
+	addHL("作息", firstMap(owner.Lifestyle, "sleep_time", "schedule"))
+	addHL("最爱的人", firstMap(owner.Relationships, "favorite_people", "important_people"))
+	addHL("家人/关系", firstNonEmpty(
+		firstMap(owner.Relationships, "important_people"),
+		firstMap(owner.Relationships, "老婆", "老公", "女朋友", "男朋友", "pets"),
+	))
+	addHL("最爱", firstNonEmpty(
+		firstMap(owner.Preferences, "favorites", "likes"),
+		firstMap(owner.Lifestyle, "favorites", "hobbies", "favorite_games", "favorite_shows", "favorite_music", "favorite_food"),
+	))
+	addHL("不喜欢", firstMap(owner.Preferences, "dislikes"))
+	addHL("目标", firstMap(owner.Goals, "focus", "goal", "habit"))
 	addHL("风格", firstMap(owner.Preferences, "tone", "reply_style", "length"))
-	addHL("边界", firstMap(owner.Boundaries, "no_go", "quiet_hours"))
+	addHL("边界", firstNonEmpty(
+		firstMap(owner.Boundaries, "no_go", "quiet_hours"),
+		firstMap(owner.Boundaries, "allergies"),
+	))
 	if highlights == 0 {
-		b.WriteString("- （尚空）合适时问 1 个问题并 owner_dossier_update。\n")
+		b.WriteString("- （尚空）闲聊里说到的个人情况会自动写入知识库；也可主动说「记住…」。\n")
 	} else if len(owner.OpenQuestions) > 0 {
 		fmt.Fprintf(&b, "- 可了解：%s\n", truncateRunes(owner.OpenQuestions[0], 50))
 	}

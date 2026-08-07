@@ -33,22 +33,44 @@ func TestOptimizeQueryStardew(t *testing.T) {
 	}
 }
 
-func TestExpandQueriesStardew(t *testing.T) {
-	qs := ExpandQueries("星露谷最近有什么新料", "news")
-	joined := strings.Join(qs, " | ")
-	if !strings.Contains(joined, "Stardew") {
-		t.Fatalf("expected English alias, got %v", qs)
+func TestClassifyScope(t *testing.T) {
+	if got := ClassifyScope("黑田朝日第102回山神"); got != ScopeCN && got != ScopeBoth {
+		t.Fatalf("hakone should prefer cn, got %s", got)
 	}
-	if len(qs) < 2 {
-		t.Fatalf("expected multiple variants, got %v", qs)
+	if ClassifyScope("Haaland World Cup Norway") != ScopeIntl {
+		t.Fatalf("haaland en should be intl")
+	}
+	got := ClassifyScope("哈兰德世界杯入选了吗")
+	if got != ScopeIntl && got != ScopeBoth {
+		t.Fatalf("haaland/worldcup should use intl or both, got %s", got)
+	}
+	if ClassifyScope("今天北京限行吗") != ScopeCN {
+		t.Fatalf("local cn topic should be cn")
 	}
 }
 
-func TestExpandQueriesHakone(t *testing.T) {
-	qs := ExpandQueries("第102回箱根驿传 区间赏", "news")
-	joined := strings.Join(qs, " | ")
-	if !strings.Contains(joined, "駅伝") && !strings.Contains(joined, "Hakone") {
-		t.Fatalf("expected JP/EN hakone variants, got %v", qs)
+func TestOptimizeQueryHaalandWorldCup(t *testing.T) {
+	o := OptimizeQuery("哈兰德踢世界杯了吗", "")
+	if o.Kind != "news" {
+		t.Fatalf("expected news kind, got %s", o.Kind)
+	}
+	joined := strings.Join(append(append([]string{}, o.CN...), o.Intl...), " | ")
+	if !strings.Contains(joined, "Haaland") {
+		t.Fatalf("expected Haaland alias, got %v", o)
+	}
+	if !strings.Contains(joined, "World Cup") && !strings.Contains(joined, "世界杯") {
+		t.Fatalf("expected world cup terms, got %v", o)
+	}
+}
+
+func TestOptimizeQueryKurodaYamanokami(t *testing.T) {
+	o := OptimizeQuery("黑田朝日是不是第102回山神", "")
+	joined := strings.Join(append(append([]string{}, o.CN...), o.Intl...), " | ")
+	if !strings.Contains(joined, "黒田") && !strings.Contains(joined, "Kuroda") {
+		t.Fatalf("expected JP/EN kuroda, got %v", o)
+	}
+	if !strings.Contains(joined, "山の神") && !strings.Contains(joined, "箱根") {
+		t.Fatalf("expected yamanokami/hakone expand, got %v", o)
 	}
 }
 

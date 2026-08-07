@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
 	// DeepSeek / DSML-style tool dumps often leak into content when tool_choice=none.
-	dsmlInvokeRe = regexp.MustCompile(`(?is)invoke\s+name\s*=\s*"([a-zA-Z0-9_]+)"`)
-	dsmlParamRe  = regexp.MustCompile(`(?is)parameter\s+name\s*=\s*"([a-zA-Z0-9_]+)"[^>]*>([^<]*)<`)
-	xmlToolRe    = regexp.MustCompile(`(?is)<tool_call>\s*<function\s*=\s*([a-zA-Z0-9_]+)>([\s\S]*?)</tool_call>`)
-	xmlArgRe     = regexp.MustCompile(`(?is)<parameter\s*=\s*([a-zA-Z0-9_]+)>\s*([^<]*)\s*</parameter>`)
-	jsonToolRe   = regexp.MustCompile(`(?is)\{\s*"name"\s*:\s*"([a-zA-Z0-9_]+)"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}`)
+	dsmlInvokeRe   = regexp.MustCompile(`(?is)invoke\s+name\s*=\s*"([a-zA-Z0-9_]+)"`)
+	dsmlParamRe    = regexp.MustCompile(`(?is)parameter\s+name\s*=\s*"([a-zA-Z0-9_]+)"[^>]*>([^<]*)<`)
+	xmlToolRe      = regexp.MustCompile(`(?is)<tool_call>\s*<function\s*=\s*([a-zA-Z0-9_]+)>([\s\S]*?)</tool_call>`)
+	xmlArgRe       = regexp.MustCompile(`(?is)<parameter\s*=\s*([a-zA-Z0-9_]+)>\s*([^<]*)\s*</parameter>`)
+	jsonToolRe     = regexp.MustCompile(`(?is)\{\s*"name"\s*:\s*"([a-zA-Z0-9_]+)"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}`)
 	toolLeakHintRe = regexp.MustCompile(`(?is)(?:DSML|tool_calls|</?tool_call>|invoke\s+name\s*=|parameter\s+name\s*=|<function\s*=|web_search|"tool_calls")`)
+	// Fullwidth-pipe special tokens: <｜｜DSML｜｜…> or truncated <｜｜｜｜>
+	dsmlSpecialTokRe = regexp.MustCompile(`(?s)<\s*｜[^>]*>|｜{2,}`)
 )
 
 // LooksLikeToolLeak reports model content that is a fake/embedded tool call, not a user reply.
@@ -22,6 +25,12 @@ func LooksLikeToolLeak(raw string) bool {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return false
+	}
+	if strings.Contains(s, "｜｜") || strings.Contains(s, "<｜") || strings.Contains(s, "｜>") {
+		return true
+	}
+	if dsmlSpecialTokRe.MatchString(s) {
+		return true
 	}
 	if toolLeakHintRe.MatchString(s) {
 		return true
@@ -106,26 +115,85 @@ func StripToolLeak(raw string) string {
 	if s == "" {
 		return ""
 	}
-	if !LooksLikeToolLeak(s) {
-		return s
+	// Always strip DeepSeek special tokens even when the rest looks like prose.
+	s = dsmlSpecialTokRe.ReplaceAllString(s, " ")
+	if !LooksLikeToolLeak(s) && !toolLeakHintRe.MatchString(s) {
+		return strings.Join(strings.Fields(s), " ")
 	}
-	// If the whole blob is a tool dump, drop it.
-	if ParseEmbeddedToolCalls(s) != nil {
-		// Keep any prose before the first leak marker.
-		idx := strings.Index(strings.ToLower(s), "invoke")
-		if idx < 0 {
-			idx = strings.Index(strings.ToLower(s), "tool_call")
-		}
-		if idx < 0 {
-			idx = strings.Index(strings.ToLower(s), "dsml")
+	// If recoverable tool dump, keep only prose before the first leak marker.
+	if ParseEmbeddedToolCalls(raw) != nil || toolLeakHintRe.MatchString(s) {
+		low := strings.ToLower(s)
+		idx := -1
+		for _, marker := range []string{"invoke", "tool_call", "dsml", "tool_calls", "<function"} {
+			if i := strings.Index(low, marker); i >= 0 && (idx < 0 || i < idx) {
+				idx = i
+			}
 		}
 		if idx > 0 {
 			s = strings.TrimSpace(s[:idx])
-		} else {
+		} else if idx == 0 || strings.Contains(low, "invoke") || strings.Contains(low, "dsml") {
 			return ""
 		}
 	}
 	s = toolLeakHintRe.ReplaceAllString(s, "")
+	s = dsmlSpecialTokRe.ReplaceAllString(s, " ")
 	s = strings.Join(strings.Fields(s), " ")
+	if LooksLikeToolLeak(s) {
+		return ""
+	}
 	return strings.TrimSpace(s)
+}
+
+// LooksIncompleteReply catches mid-thought stalls that should not be sent to WeChat
+// (e.g. "主人别急，卡卡这就" — predicate never finished).
+func LooksIncompleteReply(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return true
+	}
+	if LooksLikeToolLeak(s) {
+		return true
+	}
+	n := utf8.RuneCountInString(s)
+	r := []rune(s)
+	last := r[len(r)-1]
+	switch last {
+	case '，', '、', ',', ';', '；', '：', ':':
+		return true
+	}
+
+	// Trailing connectors / stall phrases — model was about to act, not answering.
+	for _, suf := range []string{
+		"这就", "这就去", "这就来", "正在", "马上", "稍等", "别急",
+		"我去", "让我", "我来", "先去", "先查", "去查", "去搜",
+		"卡卡这就", "主人别急",
+	} {
+		if strings.HasSuffix(s, suf) {
+			return true
+		}
+	}
+
+	// Short "wait" fluff without a finished sentence.
+	stallHints := []string{"别急", "稍等", "等一下", "马上回", "这就办", "我查查"}
+	hasStall := false
+	for _, h := range stallHints {
+		if strings.Contains(s, h) {
+			hasStall = true
+			break
+		}
+	}
+	if hasStall && n < 36 && !hasStrongSentenceEnd(s) {
+		return true
+	}
+	return false
+}
+
+func hasStrongSentenceEnd(s string) bool {
+	for _, r := range s {
+		switch r {
+		case '。', '！', '？', '!', '?', '…', '～':
+			return true
+		}
+	}
+	return false
 }

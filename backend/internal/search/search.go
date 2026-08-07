@@ -49,6 +49,8 @@ type Options struct {
 	Limit int
 	// Type: ""|"web"|"news" — news appends freshness keywords / prefers news sources.
 	Type string
+	// Scope: cn|intl|both|"" — empty means ClassifyScope(query).
+	Scope Scope
 	// Optional pre-optimized lanes (from agent LLM rewrite). Empty → OptimizeQuery.
 	CNQueries   []string
 	IntlQueries []string
@@ -62,7 +64,6 @@ var (
 	tagRe       = regexp.MustCompile(`(?is)<[^>]+>`)
 	sogouTitleRe = regexp.MustCompile(`(?is)<h3[^>]*class="[^"]*vr-title[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>`)
 	sogouSnipRe  = regexp.MustCompile(`(?is)class="[^"]*space-txt[^"]*"[^>]*>(.*?)</(?:p|div)>`)
-	sogouCiteRe  = regexp.MustCompile(`(?is)class="citeurl"[^>]*>(.*?)<`)
 	weixinTitleRe = regexp.MustCompile(`(?is)<a[^>]+href="([^"]+)"[^>]*id="sogou_vr_11002601_title_(\d+)"[^>]*>(.*?)</a>`)
 	weixinSumRe   = regexp.MustCompile(`(?is)<p class="txt-info"[^>]*id="sogou_vr_11002601_summary_(\d+)"[^>]*>([\s\S]*?)</p>`)
 )
@@ -92,14 +93,11 @@ var queryAliases = []struct {
 	{"箱根驿传", "Hakone Ekiden"},
 	{"箱根駅伝", "Hakone Ekiden"},
 	{"箱根接力", "Hakone Ekiden"},
+	{"哈兰德", "Haaland"},
+	{"黑田朝日", "Kuroda Asahi"},
 }
 
-// Search gathers brief facts for a query from free public sources.
-func (s *Service) Search(ctx context.Context, query string, limit int) ([]Hit, error) {
-	return s.SearchOpt(ctx, query, Options{Limit: limit})
-}
-
-// SearchOpt is the federated entry point: optimize query → CN∥intl fanout → merge.
+// SearchOpt is the federated entry point: optimize query → scoped fanout → merge.
 func (s *Service) SearchOpt(ctx context.Context, query string, opt Options) ([]Hit, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
@@ -127,9 +125,27 @@ func (s *Service) SearchOpt(ctx context.Context, query string, opt Options) ([]H
 	if len(opt.IntlQueries) > 0 {
 		intlQs = capStrings(opt.IntlQueries, 4)
 	}
+
+	scope := opt.Scope
+	if scope != ScopeCN && scope != ScopeIntl && scope != ScopeBoth {
+		scope = ClassifyScope(q)
+	}
+	// Cap variants per lane for latency.
+	qCap := 2
+	if scope == ScopeBoth {
+		qCap = 2
+	}
+	cnQs = capStrings(cnQs, qCap)
+	intlQs = capStrings(intlQs, qCap)
+	if scope == ScopeCN {
+		intlQs = nil
+	}
+	if scope == ScopeIntl {
+		cnQs = nil
+	}
 	allQs := append(append([]string{}, cnQs...), intlQs...)
 
-	cacheKey := fmt.Sprintf("search:v3:%s:%s", kind, strings.ToLower(q))
+	cacheKey := fmt.Sprintf("search:v4:%s:%s:%s", scope, kind, strings.ToLower(q))
 	if v, ok := s.cache.Get(cacheKey); ok {
 		var hits []Hit
 		if json.Unmarshal([]byte(v), &hits) == nil && len(hits) > 0 {
@@ -140,118 +156,32 @@ func (s *Service) SearchOpt(ctx context.Context, query string, opt Options) ([]H
 		}
 	}
 
-	// 12s wall: domestic + foreign lanes run together (no sequential starve).
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
-
-	var (
-		mu   sync.Mutex
-		hits []Hit
-	)
-	relevant := func(h Hit) bool {
-		if looksRelevant(q, h) {
-			return true
-		}
-		for _, qq := range allQs {
-			if looksRelevant(qq, h) {
-				return true
-			}
-		}
-		return false
+	wall := 5 * time.Second
+	if scope == ScopeBoth {
+		wall = 7 * time.Second
 	}
-	add := func(h Hit) {
-		h.Title = cleanText(h.Title, 120)
-		h.Snippet = cleanText(h.Snippet, 360)
-		if h.Title == "" && h.Snippet == "" {
-			return
-		}
-		if isJunkHit(h) {
-			return
-		}
-		if isTourismNoise(q, h) {
-			return
-		}
-		if !relevant(h) {
-			return
-		}
-		mu.Lock()
-		hits = append(hits, h)
-		mu.Unlock()
+	enough := 4
+	if limit < enough {
+		enough = limit
 	}
-	tag := func(region, source string, in []Hit) {
-		for _, h := range in {
-			h.Region = region
-			if source != "" {
-				h.Source = source
-			}
-			add(h)
-		}
-	}
-
-	var wg sync.WaitGroup
-	// —— Domestic lane ——
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var inner sync.WaitGroup
-		for _, qq := range cnQs {
-			qq := qq
-			inner.Add(3)
-			go func() {
-				defer inner.Done()
-				tag("cn", "Bing·国内", s.bingRSSPref(ctx, qq, true))
-			}()
-			go func() {
-				defer inner.Done()
-				tag("cn", "WeChat", s.sogouWeixin(ctx, qq))
-			}()
-			go func() {
-				defer inner.Done()
-				tag("cn", "Sogou", s.sogouHTML(ctx, qq))
-			}()
-		}
-		inner.Wait()
-	}()
-	// —— International lane ——
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var inner sync.WaitGroup
-		for _, qq := range intlQs {
-			qq := qq
-			inner.Add(4)
-			go func() {
-				defer inner.Done()
-				tag("intl", "Bing·国际", s.bingRSSPref(ctx, qq, false))
-			}()
-			go func() {
-				defer inner.Done()
-				tag("intl", "DuckDuckGo", s.duckDuckGo(ctx, qq))
-			}()
-			go func() {
-				defer inner.Done()
-				tag("intl", "", s.wikipedia(ctx, qq))
-			}()
-			go func() {
-				defer inner.Done()
-				if kind == "news" || looksFreshIntent(q) {
-					tag("intl", "Google News", s.googleNews(ctx, qq))
-				}
-			}()
-		}
-		inner.Wait()
-	}()
-	wg.Wait()
+	hits := s.runSearchAgents(ctx, q, kind, cnQs, intlQs, allQs, enough, wall)
 
 	hits = dedupeHits(hits)
 	hits = mergePreferBothRegions(hits)
 	hits = rankHits(q, hits)
 	if len(hits) == 0 {
-		return nil, fmt.Errorf("没有搜到「%s」的可靠结果（已试国内 %s · 国外 %s）",
-			q, strings.Join(cnQs, "/"), strings.Join(intlQs, "/"))
+		return nil, fmt.Errorf("没有搜到「%s」的可靠结果（scope=%s 国内 %s · 国外 %s）",
+			q, scope, strings.Join(cnQs, "/"), strings.Join(intlQs, "/"))
 	}
 	if needsDeepRead(q) {
-		hits = s.enrichTopHits(ctx, hits, 2)
+		nRead := 1
+		if scope == ScopeBoth {
+			nRead = 2
+		}
+		// Short budget for enrich so it can't dominate latency.
+		ectx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		hits = s.enrichTopHits(ectx, hits, nRead)
+		cancel()
 	}
 	if len(hits) > limit {
 		hits = hits[:limit]
@@ -260,11 +190,6 @@ func (s *Service) SearchOpt(ctx context.Context, query string, opt Options) ([]H
 		s.cache.Set(cacheKey, string(raw), 6*time.Minute)
 	}
 	return hits, nil
-}
-
-// ExpandQueries builds bilingual / news-shaped query variants (research skill helper).
-func ExpandQueries(q, kind string) []string {
-	return OptimizeQuery(q, kind).All()
 }
 
 // mergePreferBothRegions interleaves domestic and international hits so the
@@ -309,6 +234,8 @@ func toJapaneseSportsForm(s string) string {
 		"驿", "駅",
 		"区间赏", "区間賞",
 		"区间", "区間",
+		"黑田朝日", "黒田朝日",
+		"山神", "山の神",
 	)
 	return r.Replace(s)
 }
@@ -319,15 +246,22 @@ func toChineseSportsForm(s string) string {
 		"駅", "驿",
 		"区間賞", "区间赏",
 		"区間", "区间",
+		"黒田朝日", "黑田朝日",
+		"山の神", "山神",
 	)
 	return r.Replace(s)
 }
 
 func looksFreshIntent(q string) bool {
-	keys := []string{"最新", "新料", "更新", "版本", "补丁", "新闻", "热点", "今天", "近日", "刚刚", "latest", "update", "patch", "news", "release"}
+	keys := []string{
+		"最新", "新料", "更新", "版本", "补丁", "新闻", "热点", "今天", "近日", "刚刚",
+		"本届", "本赛季", "赛季", "世界杯", "入选", "国家队", "山神", "山の神",
+		"成绩", "冠军", "结果", "谁赢", "比赛", "球员", "选手",
+		"latest", "update", "patch", "news", "release", "world cup", "squad", "roster",
+	}
 	low := strings.ToLower(q)
 	for _, k := range keys {
-		if strings.Contains(low, strings.ToLower(k)) {
+		if strings.Contains(low, strings.ToLower(k)) || strings.Contains(q, k) {
 			return true
 		}
 	}
@@ -389,10 +323,6 @@ func FormatHits(hits []Hit) string {
 		b.WriteByte('\n')
 	}
 	return strings.TrimSpace(b.String())
-}
-
-func (s *Service) bingRSS(ctx context.Context, q string) []Hit {
-	return s.bingRSSPref(ctx, q, true)
 }
 
 func (s *Service) bingRSSPref(ctx context.Context, q string, preferCN bool) []Hit {
@@ -737,10 +667,11 @@ func (s *Service) get(ctx context.Context, rawURL string, softTimeout time.Durat
 func needsDeepRead(q string) bool {
 	keys := []string{
 		"名单", "选手", "区间赏", "区間賞", "区间", "区間", "成绩", "成績", "冠军", "優勝",
-		"结果", "結果", "roster", "section", "prize", "winner", "results",
+		"结果", "結果", "山神", "山の神", "入选", "世界杯", "国家队",
+		"roster", "section", "prize", "winner", "results", "squad", "world cup",
 	}
 	for _, k := range keys {
-		if strings.Contains(q, k) {
+		if strings.Contains(q, k) || strings.Contains(strings.ToLower(q), strings.ToLower(k)) {
 			return true
 		}
 	}

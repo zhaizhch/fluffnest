@@ -308,24 +308,6 @@ func ownerRecallSnippet(d OwnerDossier, query string) string {
 	return fmt.Sprintf("[owner_dossier] %s = %s", candidates[0].k, truncateRunes(candidates[0].v, 120))
 }
 
-func (m *Memory) AddSessionNote(peerID, note string) error {
-	peerID = strings.TrimSpace(peerID)
-	note = strings.TrimSpace(note)
-	if peerID == "" || note == "" {
-		return nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sess := m.Sessions[peerID]
-	sess.Notes = append(sess.Notes, truncateRunes(note, sessionNoteRunes))
-	if len(sess.Notes) > sessionNotesKeep {
-		sess.Notes = sess.Notes[len(sess.Notes)-sessionNotesKeep:]
-	}
-	sess.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	m.Sessions[peerID] = sess
-	return m.saveLocked()
-}
-
 func looksSecret(key, value string) bool {
 	k := strings.ToLower(key + " " + value)
 	for _, s := range []string{"password", "passwd", "api_key", "apikey", "token", "secret", "bot_token", "私钥", "密码"} {

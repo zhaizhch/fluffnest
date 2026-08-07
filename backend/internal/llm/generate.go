@@ -366,26 +366,6 @@ func parseLineList(raw string, want int) ([]string, error) {
 	return lines, nil
 }
 
-// ProactiveBehavior maps kind → pet animation id.
-func ProactiveBehavior(kind string) string {
-	switch kind {
-	case "weather":
-		return "look"
-	case "joke":
-		return "cheer"
-	case "news":
-		return "wave"
-	case "fortune":
-		return "magic"
-	case "reminder":
-		return "react"
-	case "wechat":
-		return "phone"
-	default:
-		return "wave"
-	}
-}
-
 func (c *Client) GenerateImTriage(ctx context.Context, llm types.LlmSettings, pet types.PetInstance, sender, text string) (types.ImTriageResponse, error) {
 	var empty types.ImTriageResponse
 	if err := EnsureConfigured(llm); err != nil {

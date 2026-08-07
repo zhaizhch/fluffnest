@@ -32,6 +32,8 @@ type ToolDeps struct {
 	LlmCfg      types.LlmSettings
 	Attachments []types.ImAttachment
 	MediaRoot   string
+	Board       *AgentBoard // turn-scoped shared message log
+	Crew        *Crew       // turn-scoped persistent agent team
 }
 
 type toolHandler func(ctx context.Context, deps ToolDeps, args map[string]any) string
@@ -151,10 +153,68 @@ func toolSpecs() []llm.ToolSpec {
 			},
 			"required": []string{"kind", "text"},
 		}),
+		fnTool("multi_agent_run", "主智能体组建持久子智能体团队（Crew）：hire→协作→审查→disband。决策/利弊/多视角时用。mode=concurrent(默认并行最快)|sequential(串行+广播)|handoff(主办+审查)。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"topic":          map[string]any{"type": "string", "description": "议题/决策点"},
+				"mode":           map[string]any{"type": "string", "description": "concurrent|sequential|handoff，默认 concurrent"},
+				"agents":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "成员：researcher|critic|planner|risk|creative|advocate|reviewer，或 name:task；空则用默认三人组"},
+				"shared_context": map[string]any{"type": "string", "description": "共享背景（检索摘要等）"},
+				"with_tools":     map[string]any{"type": "boolean", "description": "子智能体是否可用 web_search/calc 等（更慢）"},
+				"keep_alive":     map[string]any{"type": "boolean", "description": "true=不解散，便于 agent_chat/send 继续"},
+				"auto_plan":      map[string]any{"type": "boolean", "description": "true=LLM 规划名单（多一次调用）"},
+			},
+			"required": []string{"topic"},
+		}),
+		fnTool("agent_send", "向存活团队中某成员 inbox 发私信（下次 agent_chat 会读到）。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"to":      map[string]any{"type": "string"},
+				"message": map[string]any{"type": "string"},
+				"from":    map[string]any{"type": "string", "description": "默认 main"},
+			},
+			"required": []string{"to", "message"},
+		}),
+		fnTool("agent_broadcast", "向存活团队全体广播（写入各人 inbox + 白板）。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"message": map[string]any{"type": "string"},
+				"from":    map[string]any{"type": "string", "description": "默认 main"},
+			},
+			"required": []string{"message"},
+		}),
+		fnTool("agent_chat", "与存活团队中某持久 Agent 再聊一轮（保留其 messages 记忆）。需 keep_alive=true 的会议。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+				"task": map[string]any{"type": "string"},
+			},
+			"required": []string{"name", "task"},
+		}),
+		fnTool("team_status", "查看本轮团队成员与白板摘要。", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}),
+		fnTool("agent_board_post", "向共享白板发消息；若 to 为成员名则同时写入其 inbox。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"from": map[string]any{"type": "string", "description": "默认 main"},
+				"to":   map[string]any{"type": "string", "description": "all 或成员名"},
+				"kind": map[string]any{"type": "string", "description": "opinion|question|reply|evidence|meta"},
+				"text": map[string]any{"type": "string"},
+			},
+			"required": []string{"text"},
+		}),
+		fnTool("agent_board_read", "读取本轮多智能体共享白板。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"limit": map[string]any{"type": "integer"},
+			},
+		}),
 		fnTool("load_skill", "加载一个专用 skill 工作流到上下文并按其 cycle 执行。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "如 research / weather-care / companion / memory-keeper / owner-dossier / self-growth / scheduler / news-digest / entertainment / planner / clarify / lingua / documents"},
+				"name": map[string]any{"type": "string", "description": "如 research / multi-agent / weather-care / companion / memory-keeper / owner-dossier / self-growth / scheduler / news-digest / entertainment / planner / clarify / lingua / documents"},
 			},
 			"required": []string{"name"},
 		}),
@@ -275,8 +335,15 @@ func runTool(ctx context.Context, deps ToolDeps, tc llm.ToolCall) string {
 		"self_dossier_get":    toolSelfDossierGet,
 		"self_dossier_update": toolSelfDossierUpdate,
 		"self_dossier_log":    toolSelfDossierLog,
+		"multi_agent_run":     toolMultiAgentRun,
+		"agent_send":          toolAgentSend,
+		"agent_broadcast":     toolAgentBroadcast,
+		"agent_chat":          toolAgentChat,
+		"team_status":         toolTeamStatus,
+		"agent_board_post":    toolAgentBoardPost,
+		"agent_board_read":    toolAgentBoardRead,
 		"load_skill":          toolLoadSkill,
-		"list_skills":      toolListSkills,
+		"list_skills":         toolListSkills,
 		"reminder_list":    toolReminderList,
 		"reminder_set":     toolReminderSet,
 		"reminder_cancel":  toolReminderCancel,
@@ -309,11 +376,13 @@ func toolWebSearch(ctx context.Context, deps ToolDeps, args map[string]any) stri
 		kind = "news"
 	}
 
-	optimized := rewriteSearchQuery(ctx, deps, q, kind)
+	// Heuristic rewrite only — skip LLM polish so tool path stays parallel-fast.
+	optimized := search.OptimizeQuery(q, kind)
 	kind = optimized.Kind
 	hits, err := deps.Search.SearchOpt(ctx, q, search.Options{
 		Limit:       8,
 		Type:        kind,
+		Scope:       search.ClassifyScope(q),
 		CNQueries:   optimized.CN,
 		IntlQueries: optimized.Intl,
 	})
@@ -322,98 +391,18 @@ func toolWebSearch(ctx context.Context, deps ToolDeps, args map[string]any) stri
 			"\n优化后国内：" + strings.Join(optimized.CN, " · ") +
 			"\n优化后国外：" + strings.Join(optimized.Intl, " · ")
 	}
-	note := "\n（查询优化：国内「" + strings.Join(optimized.CN, " · ") +
+	note := "\n（并行检索：国内「" + strings.Join(optimized.CN, " · ") +
 		"」∥ 国外「" + strings.Join(optimized.Intl, " · ") + "」）"
 	return "搜索「" + q + "」" + note + "：\n" + search.FormatHits(hits)
-}
-
-// rewriteSearchQuery optimizes the raw user question before fanout.
-// Heuristic always; optional short LLM polish when configured.
-func rewriteSearchQuery(ctx context.Context, deps ToolDeps, raw, kind string) search.OptimizedQuery {
-	base := search.OptimizeQuery(raw, kind)
-	if deps.LLM == nil {
-		return base
-	}
-	cfg := deps.LlmCfg
-	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.APIBase) == "" {
-		return base
-	}
-
-	ctx2, cancel := context.WithTimeout(ctx, 3500*time.Millisecond)
-	defer cancel()
-	prompt := "你是搜索查询优化器。把用户问题改写成便于检索的关键词。\n" +
-		"只输出 JSON（不要 markdown）：{\"cn\":[\"中文词1\",\"中文词2\"],\"intl\":[\"English or Japanese 1\",\"...\"],\"type\":\"news|web\"}\n" +
-		"规则：cn 给国内引擎，intl 给国外引擎；去掉口语废话；新闻/成绩类 type=news；最多各 3 条。\n" +
-		"用户问题：" + raw
-	opts := llm.CompletionOpts{MaxTokens: 140, Timeout: 3 * time.Second, Temperature: 0.2}
-	out, err := deps.LLM.ChatCompletion(ctx2, cfg, []map[string]string{
-		{"role": "system", "content": "Output JSON only."},
-		{"role": "user", "content": prompt},
-	}, opts)
-	if err != nil || strings.TrimSpace(out) == "" {
-		return base
-	}
-	parsed := parseOptimizedJSON(out)
-	if len(parsed.CN) == 0 && len(parsed.Intl) == 0 {
-		return base
-	}
-	if parsed.Kind == "news" || parsed.Kind == "web" {
-		base.Kind = parsed.Kind
-	}
-	if len(parsed.CN) > 0 {
-		base.CN = mergeUniqueQueries(parsed.CN, base.CN, 4)
-	}
-	if len(parsed.Intl) > 0 {
-		base.Intl = mergeUniqueQueries(parsed.Intl, base.Intl, 4)
-	}
-	base.Note = "启发式+LLM 优化"
-	return base
-}
-
-func parseOptimizedJSON(raw string) search.OptimizedQuery {
-	raw = strings.TrimSpace(raw)
-	if i := strings.Index(raw, "{"); i >= 0 {
-		if j := strings.LastIndex(raw, "}"); j > i {
-			raw = raw[i : j+1]
-		}
-	}
-	var obj struct {
-		CN   []string `json:"cn"`
-		Intl []string `json:"intl"`
-		Type string   `json:"type"`
-	}
-	if json.Unmarshal([]byte(raw), &obj) != nil {
-		return search.OptimizedQuery{}
-	}
-	return search.OptimizedQuery{CN: obj.CN, Intl: obj.Intl, Kind: strings.ToLower(strings.TrimSpace(obj.Type))}
-}
-
-func mergeUniqueQueries(primary, fallback []string, limit int) []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(xs []string) {
-		for _, s := range xs {
-			s = strings.TrimSpace(s)
-			if s == "" || seen[strings.ToLower(s)] {
-				continue
-			}
-			seen[strings.ToLower(s)] = true
-			out = append(out, s)
-			if len(out) >= limit {
-				return
-			}
-		}
-	}
-	add(primary)
-	add(fallback)
-	return out
 }
 
 func searchLooksNews(q string) bool {
 	keys := []string{
 		"最新", "新料", "更新", "补丁", "版本", "新闻", "热点", "冠军", "成绩", "结果",
-		"区间赏", "区間賞", "名单", "选手",
+		"区间赏", "区間賞", "名单", "选手", "本届", "本赛季", "世界杯", "入选", "国家队",
+		"山神", "山の神", "球员", "比赛", "谁赢",
 		"latest", "update", "patch", "news", "release", "results", "winner", "champion",
+		"world cup", "squad", "roster",
 	}
 	low := strings.ToLower(q)
 	for _, k := range keys {
@@ -784,6 +773,142 @@ func toolSelfDossierLog(_ context.Context, deps ToolDeps, args map[string]any) s
 		return "记录失败：" + err.Error()
 	}
 	return fmt.Sprintf("已记录自我%s：%s", strings.TrimSpace(kind), truncateRunes(strings.TrimSpace(text), 80))
+}
+
+func toolMultiAgentRun(ctx context.Context, deps ToolDeps, args map[string]any) string {
+	topic, _ := args["topic"].(string)
+	shared, _ := args["shared_context"].(string)
+	mode, _ := args["mode"].(string)
+	withTools, _ := args["with_tools"].(bool)
+	keepAlive, _ := args["keep_alive"].(bool)
+	autoPlan, _ := args["auto_plan"].(bool)
+	var names []string
+	switch v := args["agents"].(type) {
+	case []any:
+		for _, x := range v {
+			if s, ok := x.(string); ok {
+				names = append(names, s)
+			}
+		}
+	case []string:
+		names = append(names, v...)
+	}
+	return RunCrew(ctx, deps, crewRunOpts{
+		Topic:         topic,
+		SharedContext: shared,
+		Mode:          mode,
+		Members:       MembersFromAgentArgs(names, topic),
+		WithTools:     withTools,
+		KeepAlive:     keepAlive,
+		AutoPlan:      autoPlan,
+	})
+}
+
+func toolAgentSend(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Crew == nil {
+		return "错误：本轮无团队"
+	}
+	to, _ := args["to"].(string)
+	msg, _ := args["message"].(string)
+	from, _ := args["from"].(string)
+	if strings.TrimSpace(from) == "" {
+		from = "main"
+	}
+	if err := deps.Crew.Send(from, to, msg); err != nil {
+		return "发送失败：" + err.Error()
+	}
+	return "已私信 " + to + "。\n" + deps.Board.Format(8)
+}
+
+func toolAgentBroadcast(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Crew == nil {
+		return "错误：本轮无团队"
+	}
+	msg, _ := args["message"].(string)
+	from, _ := args["from"].(string)
+	if strings.TrimSpace(from) == "" {
+		from = "main"
+	}
+	deps.Crew.Broadcast(from, msg)
+	return "已广播。\n" + deps.Board.Format(8)
+}
+
+func toolAgentChat(ctx context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Crew == nil {
+		return "错误：本轮无团队（先 multi_agent_run 且 keep_alive=true）"
+	}
+	name, _ := args["name"].(string)
+	task, _ := args["task"].(string)
+	ag, ok := deps.Crew.Get(name)
+	if !ok {
+		return "未找到成员：" + name + "；在场：" + strings.Join(deps.Crew.Names(), ", ")
+	}
+	text, err := ag.Chat(ctx, deps, task, false)
+	if err != nil {
+		return "对话失败：" + err.Error()
+	}
+	deps.Crew.Broadcast(ag.Name, "补充发言摘要："+truncateRunes(text, 200))
+	return fmt.Sprintf("[%s] %s\n\n%s", ag.Name, text, deps.Board.Format(10))
+}
+
+func toolTeamStatus(_ context.Context, deps ToolDeps, _ map[string]any) string {
+	var b strings.Builder
+	b.WriteString("## 团队状态\n")
+	if deps.Crew == nil || len(deps.Crew.Names()) == 0 {
+		b.WriteString("（无存活成员）\n")
+	} else {
+		for _, n := range deps.Crew.Names() {
+			ag, _ := deps.Crew.Get(n)
+			mem := 0
+			role := ""
+			if ag != nil {
+				mem = ag.MemoryLen()
+				role = ag.Role
+			}
+			b.WriteString(fmt.Sprintf("- %s（%s）messages=%d\n", n, role, mem))
+		}
+	}
+	if deps.Board != nil {
+		b.WriteString("\n" + deps.Board.Format(12))
+	}
+	return b.String()
+}
+
+func toolAgentBoardPost(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Board == nil {
+		return "错误：白板未就绪（本轮未初始化）"
+	}
+	from, _ := args["from"].(string)
+	to, _ := args["to"].(string)
+	kind, _ := args["kind"].(string)
+	text, _ := args["text"].(string)
+	if strings.TrimSpace(from) == "" {
+		from = "main"
+	}
+	deps.Board.Post(from, to, kind, text)
+	if deps.Crew != nil {
+		to = strings.TrimSpace(to)
+		if to != "" && !strings.EqualFold(to, "all") {
+			_ = deps.Crew.Send(from, to, text)
+		} else {
+			deps.Crew.Broadcast(from, text)
+		}
+	}
+	return "已写入白板。\n" + deps.Board.Format(12)
+}
+
+func toolAgentBoardRead(_ context.Context, deps ToolDeps, args map[string]any) string {
+	if deps.Board == nil {
+		return "（本轮尚未召开多智能体会议，白板为空）"
+	}
+	limit := 0
+	switch v := args["limit"].(type) {
+	case float64:
+		limit = int(v)
+	case int:
+		limit = v
+	}
+	return deps.Board.Format(limit)
 }
 
 func toolLoadSkill(_ context.Context, deps ToolDeps, args map[string]any) string {

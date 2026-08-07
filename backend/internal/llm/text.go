@@ -14,10 +14,68 @@ var (
 
 func TruncateChars(s string, max int) string {
 	r := []rune(s)
-	if len(r) <= max {
+	if max <= 0 || len(r) <= max {
 		return strings.TrimSpace(s)
 	}
 	return strings.TrimSpace(string(r[:max]))
+}
+
+// TruncateAtSentence cuts near max but prefers ending on 。！？… or .!?
+// so WeChat replies don't look like they stopped mid-thought.
+func TruncateAtSentence(s string, max int) string {
+	r := []rune(strings.TrimSpace(s))
+	if max <= 0 || len(r) <= max {
+		return strings.TrimSpace(s)
+	}
+	cut := r[:max]
+
+	// 1) Last strong sentence end that still keeps a meaningful prefix (~1/3+).
+	strongMin := max / 3
+	if strongMin < 8 {
+		strongMin = 8
+	}
+	lastStrong := -1
+	for i := 0; i < len(cut); i++ {
+		if isStrongSentenceEnd(cut, i) {
+			lastStrong = i
+		}
+	}
+	if lastStrong+1 >= strongMin {
+		return strings.TrimSpace(string(cut[:lastStrong+1]))
+	}
+
+	// 2) Last soft break in the latter half (drop a short incomplete tail).
+	softMin := max / 2
+	lastSoft := -1
+	for i := softMin; i < len(cut); i++ {
+		switch cut[i] {
+		case '，', '、', '；', ',', ';':
+			lastSoft = i
+		}
+	}
+	if lastSoft >= softMin {
+		return strings.TrimSpace(string(cut[:lastSoft+1]))
+	}
+
+	return strings.TrimSpace(string(cut))
+}
+
+func isStrongSentenceEnd(r []rune, i int) bool {
+	switch r[i] {
+	case '。', '！', '？', '…', '!', '?', '～':
+		return true
+	case '.':
+		// Avoid decimals like 3.14
+		if i+1 < len(r) && unicode.IsDigit(r[i+1]) {
+			return false
+		}
+		if i > 0 && unicode.IsDigit(r[i-1]) {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func StripThinking(raw string) string {
@@ -102,7 +160,11 @@ func CleanWechatReply(raw string, max int) string {
 	if LooksLikeToolLeak(t) {
 		return ""
 	}
-	return TruncateChars(t, max)
+	t = TruncateAtSentence(t, max)
+	if LooksIncompleteReply(t) {
+		return ""
+	}
+	return t
 }
 
 // CleanWeatherLine keeps short multi-sentence weather advice (allows newlines → spaces).

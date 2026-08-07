@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,15 +19,15 @@ import (
 
 const (
 	MaxCycles      = 4 // gather → act → finalize; WeChat shouldn't burn 6 LLM RTTs
-	MaxReplyChars  = 600
+	MaxReplyChars  = 900
 	DefaultChannel = "wechat"
 )
 
-// Agent LLM budgets — prefer fewer/faster calls over long thinking.
+// Agent LLM budgets — enough headroom so WeChat replies aren't cut mid-sentence.
 var (
-	agentThinkOpts = llm.CompletionOpts{MaxTokens: 380, Timeout: 16 * time.Second, Temperature: 0.45}
-	agentFinalOpts = llm.CompletionOpts{MaxTokens: 420, Timeout: 14 * time.Second, Temperature: 0.5}
-	agentFastOpts  = llm.CompletionOpts{MaxTokens: 280, Timeout: 12 * time.Second, Temperature: 0.55}
+	agentThinkOpts = llm.CompletionOpts{MaxTokens: 700, Timeout: 18 * time.Second, Temperature: 0.45}
+	agentFinalOpts = llm.CompletionOpts{MaxTokens: 900, Timeout: 18 * time.Second, Temperature: 0.5}
+	agentFastOpts  = llm.CompletionOpts{MaxTokens: 480, Timeout: 14 * time.Second, Temperature: 0.55}
 )
 
 // Request is one agent turn from WeChat (or other channel).
@@ -105,6 +106,15 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	if deps.MediaRoot == "" {
 		deps.MediaRoot = defaultMediaRoot()
 	}
+	deps.Board = NewAgentBoard("")
+	deps.Crew = NewCrew(deps.Board)
+
+	// Capture favorites/people from this utterance before prompt assembly,
+	// so Essentials already reflects what the master just said.
+	if n := rt.Memory.HarvestOwnerKnowledge(req.PeerID, req.Message); n > 0 {
+		log.Printf("[agent] harvested %d knowledge fields peer=%s", n, shortPeer(req.PeerID))
+	}
+
 	if req.Host != nil {
 		deps.Host = &HostBridge{Snapshot: *req.Host}
 	} else {
@@ -129,6 +139,23 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	if routeNote := FormatRoutedSkills(matched); routeNote != "" {
 		log.Printf("[agent] routed skills=%s peer=%s", routeNote, shortPeer(req.PeerID))
+	}
+
+	// Kick off search agent in parallel with prompt/memory assembly.
+	type prefRes struct {
+		brief string
+		ok    bool
+	}
+	var prefCh <-chan prefRes
+	doPrefetch := shouldPrefetchWeb(matched, req.Message, req.Attachments)
+	if doPrefetch {
+		ch := make(chan prefRes, 1)
+		prefCh = ch
+		msgCopy := req.Message
+		go func() {
+			b, ok := prefetchWebBriefing(ctx, deps, msgCopy)
+			ch <- prefRes{brief: b, ok: ok}
+		}()
 	}
 
 	system := rt.buildSystemPrompt(req.Pet, channel, city, skillBlocks)
@@ -156,23 +183,50 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	messages = append(messages, CompressHistory(req.History)...)
-	messages = append(messages, llm.ChatMessage{
-		Role: "user",
-		Content: fmt.Sprintf(
-			"主人微信：%s\n\n衔接 Working Memory/近期对话。需要事实再调工具（已注入的 skill 勿再 load_skill）。最后直接口语回复。",
-			strings.TrimSpace(req.Message),
-		),
-	})
 
-	fastPath := !needsToolsLikely(matched, req.Message, req.Attachments)
-	tools := toolSpecs()
 	var (
 		toolsUsed  []string
 		skillsUsed = append([]string{}, matchedNames...)
 		trace      []string
 		usedTool   bool
 	)
+	fastPath := !needsToolsLikely(matched, req.Message, req.Attachments)
+	if doPrefetch {
+		select {
+		case r := <-prefCh:
+			if r.ok {
+				messages = append(messages, llm.ChatMessage{
+					Role: "system",
+					Content: "## 本轮检索结果（国内/国际并行 agent；优先依据此作答）\n" +
+						r.brief +
+						"\n若仍不够，可再调 web_search / 其它工具补证。",
+				})
+				toolsUsed = append(toolsUsed, "web_search")
+				usedTool = true
+				trace = append(trace, "prefetch_web_parallel")
+			} else {
+				trace = append(trace, "prefetch_web_empty")
+			}
+		case <-ctx.Done():
+			trace = append(trace, "prefetch_web_canceled")
+		}
+	} else {
+		trace = append(trace, "skip_web_prefetch")
+	}
 
+	userHint := "请依据 Working Memory 作答；确定性任务用对应工具。最后直接口语回复。"
+	if usedTool {
+		userHint = "请依据上方 Working Memory / 检索结果作答；近况勿凭记忆编造。已注入的 skill 勿再 load_skill。最后直接口语回复。"
+	}
+	messages = append(messages, llm.ChatMessage{
+		Role: "user",
+		Content: fmt.Sprintf(
+			"主人微信：%s\n\n%s",
+			strings.TrimSpace(req.Message), userHint,
+		),
+	})
+
+	tools := toolSpecs()
 	for cycle := 1; cycle <= MaxCycles; cycle++ {
 		trace = append(trace, fmt.Sprintf("cycle_%d_think", cycle))
 		opts := agentThinkOpts
@@ -180,7 +234,7 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 		activeTools := tools
 		switch {
 		case fastPath && cycle == 1 && !usedTool:
-			// Chitchat / follow-up: one shot, no tool RTT.
+			// Pure chitchat only: one shot, no tool RTT.
 			opts = agentFastOpts
 			toolChoice = "none"
 			activeTools = nil
@@ -207,15 +261,12 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 			if embedded := llm.ParseEmbeddedToolCalls(res.Content); len(embedded) > 0 {
 				res.ToolCalls = embedded
 				trace = append(trace, "recover_embedded_tools")
-			} else if llm.LooksLikeToolLeak(res.Content) && !usedTool && cycle < MaxCycles {
+			} else if llm.LooksLikeToolLeak(res.Content) && cycle < MaxCycles {
+				// Never append raw DSML into history — that teaches the model to leak again.
 				fastPath = false
 				messages = append(messages, llm.ChatMessage{
-					Role:    "assistant",
-					Content: res.Content,
-				})
-				messages = append(messages, llm.ChatMessage{
 					Role:    "user",
-					Content: "不要把工具调用写成 XML/DSML 文本。请用正式 tools 调用 web_search 等，再给口语答案。",
+					Content: "刚才工具调用格式无效。请用正式 tools 调用（如 web_search），或直接给主人完整中文口语答案；禁止输出 DSML/XML/特殊符号。",
 				})
 				trace = append(trace, "retry_after_tool_leak")
 				continue
@@ -224,9 +275,19 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (Result, error) {
 
 		if len(res.ToolCalls) == 0 {
 			text := llm.CleanWechatReply(res.Content, MaxReplyChars)
-			if text == "" {
+			if text == "" || llm.LooksIncompleteReply(text) {
+				// Mid-thought stall ("主人别急，卡卡这就") or stripped leak — don't ship.
+				if cycle < MaxCycles {
+					fastPath = false
+					messages = append(messages, llm.ChatMessage{
+						Role:    "user",
+						Content: "请给出完整的微信口语回复，把话说完；不要只说「别急/这就…」半截，也不要输出工具标记。",
+					})
+					trace = append(trace, "retry_incomplete_reply")
+					continue
+				}
 				if usedTool {
-					return rt.synthesize(ctx, req, messages, cycle, toolsUsed, skillsUsed, trace, deps)
+					return rt.synthesize(ctx, req, messages, cycle, toolsUsed, skillsUsed, append(trace, "incomplete_synth"), deps)
 				}
 				return rt.fallback(ctx, req, deps, city, matchedNames)
 			}
@@ -328,20 +389,22 @@ func persistTurnAsync(mem *Memory, peerID, question, answer string, skills []str
 	}
 	peerID = strings.TrimSpace(peerID)
 	go func() {
+		_ = mem.HarvestOwnerKnowledge(peerID, question)
 		_ = mem.RememberTurn(peerID, question, answer)
 		writeLastSkills(mem, peerID, uniq(skills))
 	}()
 }
 
 // needsToolsLikely decides whether this turn should skip the tool-calling path.
+// Policy: default OPEN tools; only a narrow chitchat allowlist uses fast_path
+// (tool_choice=none). Do NOT enumerate proper nouns (people/events) here —
+// those belong in search aliases, not tool routing.
 func needsToolsLikely(matched []Skill, message string, atts []types.ImAttachment) bool {
 	if len(atts) > 0 {
 		return true
 	}
 	for _, sk := range matched {
-		switch sk.Name {
-		case "research", "weather-care", "news-digest", "documents", "scheduler",
-			"planner", "lingua", "memory-keeper", "owner-dossier", "self-growth":
+		if skillRequiresTools(sk.Name) {
 			return true
 		}
 	}
@@ -349,24 +412,129 @@ func needsToolsLikely(matched []Skill, message string, atts []types.ImAttachment
 	if msg == "" {
 		return false
 	}
-	low := strings.ToLower(msg)
-	needles := []string{
-		"天气", "气温", "下雨", "新闻", "热点", "头条", "搜索", "查一下", "查下", "查查",
-		"最新", "更新", "几点", "星期", "计算", "多少", "提醒", "定时", "每天",
-		"翻译", "总结", "摘要", "记住", "忘记", "档案",
-		"冠军", "成绩", "结果", "谁赢", "比赛", "决赛", "排名", "积分", "比分",
-		"驿传", "箱根",
-		"forecast", "weather", "news", "search", "translate", "champion", "score",
-		"http://", "https://",
+	if isChitchatFastPath(matched, msg) {
+		return false
 	}
-	for _, n := range needles {
+	return true
+}
+
+func skillRequiresTools(name string) bool {
+	switch name {
+	case "research", "weather-care", "news-digest", "documents", "scheduler",
+		"planner", "lingua", "memory-keeper", "owner-dossier", "self-growth", "multi-agent":
+		return true
+	default:
+		return false
+	}
+}
+
+var (
+	nthEditionRe = regexp.MustCompile(`第\s*\d+\s*回`)
+	socialAskRe  = regexp.MustCompile(`(?i)(在吗|想我|想你|想卡|爱我|爱你|吃了吗|睡了吗|开心吗|难过吗|想我了吗|早上好|晚安|早安|你好呀|嗨|hi\b|hello\b|摸摸|陪我|无聊|想你了)`)
+)
+
+// isChitchatFastPath is intentionally tiny: only greetings / mood / pet roleplay.
+// Preference statements & recalls need tools/dossier path (or at least not skip memory).
+func isChitchatFastPath(matched []Skill, msg string) bool {
+	if hasFactSeekingShape(msg) || hasPreferenceSignal(msg) {
+		return false
+	}
+	n := runeLen(msg)
+	if n > 20 {
+		return false
+	}
+	softOnly := matchedSoftSkillsOnly(matched)
+	if !softOnly && len(matched) > 0 {
+		return false
+	}
+	if n <= 6 {
+		return true
+	}
+	return looksSocialUtterance(msg)
+}
+
+func matchedSoftSkillsOnly(matched []Skill) bool {
+	if len(matched) == 0 {
+		return true
+	}
+	for _, sk := range matched {
+		switch sk.Name {
+		case "companion", "entertainment", "clarify":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func hasFactSeekingShape(msg string) bool {
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "http://") || strings.Contains(low, "https://") {
+		return true
+	}
+	if nthEditionRe.MatchString(msg) {
+		return true
+	}
+	// Category / lookup cues (domains, not proper nouns).
+	for _, n := range []string{
+		"搜索", "查一下", "查下", "查查", "搜一下", "搜一搜",
+		"新闻", "热点", "头条", "最新", "新料", "更新", "补丁",
+		"天气", "气温", "下雨", "几点", "星期", "计算", "多少",
+		"翻译", "总结", "摘要", "提醒", "定时", "每天",
+		"记住", "忘记", "档案",
+		"成绩", "冠军", "比分", "排名", "比赛", "决赛", "谁赢",
+		"名单", "入选", "国家队", "世界杯", "本届", "本赛季",
+		"weather", "forecast", "news", "search", "translate",
+		"champion", "score", "world cup", "update", "patch",
+	} {
 		if strings.Contains(low, strings.ToLower(n)) || strings.Contains(msg, n) {
 			return true
 		}
 	}
-	// Fact-seeking questions: has ？/? and is longer than pure chitchat.
+	// Non-social questions → treat as fact-seeking.
 	if (strings.Contains(msg, "？") || strings.Contains(msg, "?")) && runeLen(msg) >= 6 {
+		if !isSocialQuestion(msg) {
+			return true
+		}
+	}
+	// “是不是/有没有/怎样了” about a topic (not pure mood).
+	if runeLen(msg) >= 8 {
+		for _, w := range []string{"是不是", "有没有", "怎么样了", "怎样了", "谁是", "哪年", "几号"} {
+			if strings.Contains(msg, w) && !isSocialQuestion(msg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isSocialQuestion(msg string) bool {
+	return socialAskRe.MatchString(msg) || looksMoodTalk(msg)
+}
+
+func looksSocialUtterance(msg string) bool {
+	if isSocialQuestion(msg) || looksMoodTalk(msg) {
 		return true
+	}
+	low := strings.ToLower(msg)
+	for _, w := range []string{
+		"哈哈", "嘿嘿", "嗯嗯", "好呀", "好的", "谢谢", "拜拜", "在的",
+		"摸摸", "抱抱", "想你", "陪我", "无聊", "开心", "难过", "晚安", "早安",
+		"hello", "hi", "hey",
+	} {
+		if strings.Contains(low, w) || strings.Contains(msg, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksMoodTalk(msg string) bool {
+	for _, w := range []string{"心情", "感觉", "累了", "开心", "难过", "想哭", "想你", "陪陪", "撒娇"} {
+		if strings.Contains(msg, w) {
+			return true
+		}
 	}
 	return false
 }
@@ -399,8 +567,9 @@ func (rt *Runtime) buildSystemPrompt(pet types.PetInstance, channel, city string
 		b.WriteString("\n（正文已注入，通常无需再 load_skill）")
 	}
 	b.WriteString("\n\n## Cycle Contract\n")
-	b.WriteString("Observe → Working Memory → Tools?(缺事实才调) → 微信口语回复。\n")
-	b.WriteString("已注入 essentials + working memory + 近期对话；够用就直接答，少绕工具圈。\n")
+	b.WriteString("Observe → Working Memory ∥ 检索agents → 主智能体判断是否 multi_agent_run → 工具 → 微信口语回复。\n")
+	b.WriteString("天气/时间/计算/翻译/记忆/提醒等确定性任务不要网页搜索；时事/人物近况才检索。\n")
+	b.WriteString("决策/利弊/多视角权衡可用多智能体会议（共享白板）；简单问题不要开会。\n")
 	b.WriteString("最终回复必须是给主人看的中文口语，不要输出 JSON/工具参数。")
 	return b.String()
 }
@@ -416,7 +585,7 @@ func (rt *Runtime) synthesize(
 	messages = append(messages, llm.ChatMessage{
 		Role: "user",
 		Content: fmt.Sprintf(
-			"请根据以上 rules/skills/tools/memory 结果，用「%s」口吻写出最终微信回复（≤%d字，直接回复）。原问题：%s",
+			"请根据以上 rules/skills/tools/memory 结果，用「%s」口吻写出最终微信回复（≤%d字，句子要说完，直接回复）。原问题：%s",
 			req.Pet.Name, MaxReplyChars, req.Message,
 		),
 	})
@@ -426,8 +595,8 @@ func (rt *Runtime) synthesize(
 		return Result{}, err
 	}
 	text := llm.CleanWechatReply(res.Content, MaxReplyChars)
-	if text == "" {
-		return Result{}, fmt.Errorf("未能整理出回复")
+	if text == "" || llm.LooksIncompleteReply(text) {
+		return Result{}, fmt.Errorf("未能整理出完整回复")
 	}
 	persistTurnAsync(rt.Memory, req.PeerID, req.Message, text, skillsUsed)
 	return withHost(Result{
@@ -468,10 +637,8 @@ func (rt *Runtime) fallback(ctx context.Context, req Request, deps ToolDeps, cit
 func gatherBriefing(ctx context.Context, deps ToolDeps, city, userMessage string) string {
 	q := strings.TrimSpace(userMessage)
 	var parts []string
-	if deps.Search != nil {
-		if hits, err := deps.Search.Search(ctx, q, 6); err == nil {
-			parts = append(parts, "网络搜索：\n"+search.FormatHits(hits))
-		}
+	if brief, ok := prefetchWebBriefing(ctx, deps, q); ok {
+		parts = append(parts, "网络搜索：\n"+brief)
 	}
 	low := strings.ToLower(q)
 	if strings.Contains(q, "天气") || strings.Contains(low, "weather") {
@@ -485,6 +652,120 @@ func gatherBriefing(ctx context.Context, deps ToolDeps, city, userMessage string
 		return "（暂无外部资料）"
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// prefetchWebBriefing hits scoped federated search (cn|intl|both).
+func prefetchWebBriefing(ctx context.Context, deps ToolDeps, userMessage string) (string, bool) {
+	q := strings.TrimSpace(userMessage)
+	if q == "" || deps.Search == nil {
+		return "", false
+	}
+	kind := "web"
+	if searchLooksNews(q) {
+		kind = "news"
+	}
+	scope := search.ClassifyScope(q)
+	hits, err := deps.Search.SearchOpt(ctx, q, search.Options{Limit: 6, Type: kind, Scope: scope})
+	if err != nil || len(hits) == 0 {
+		return "", false
+	}
+	return search.FormatHits(hits), true
+}
+
+// shouldPrefetchWeb: only when the answer needs live web evidence.
+// Skip deterministic / tool-specific intents that won't benefit from search engines.
+func shouldPrefetchWeb(matched []Skill, message string, atts []types.ImAttachment) bool {
+	if len(atts) > 0 {
+		return false
+	}
+	msg := strings.TrimSpace(message)
+	if msg == "" || isChitchatFastPath(matched, msg) {
+		return false
+	}
+	if skipWebSearchIntent(matched, msg) {
+		return false
+	}
+	// Personal-fact statements belong in dossier, not web search.
+	if hasPersonalFactSignal(msg) && !hasFactSeekingShape(msg) && !searchLooksNews(msg) && !looksFreshIntentMsg(msg) {
+		return false
+	}
+	// Explicit research skill or fact/current-affairs shape.
+	for _, sk := range matched {
+		if sk.Name == "research" || sk.Name == "news-digest" {
+			return true
+		}
+	}
+	return hasFactSeekingShape(msg) || searchLooksNews(msg) || looksFreshIntentMsg(msg)
+}
+
+func looksFreshIntentMsg(msg string) bool {
+	keys := []string{
+		"最新", "新料", "刚刚", "近日", "本届", "本赛季", "世界杯", "入选",
+		"谁赢", "成绩", "冠军", "比赛", "转会", "山神", "驿传", "駅伝",
+	}
+	for _, k := range keys {
+		if strings.Contains(msg, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func skipWebSearchIntent(matched []Skill, msg string) bool {
+	// Dedicated-tool intents (even without skill match).
+	low := strings.ToLower(msg)
+	for _, k := range []string{
+		"天气", "气温", "下雨", "下雪", "紫外线", "穿什么",
+		"几点", "星期几", "周几", "今天几号", "现在时间",
+		"计算", "算一下", "等于多少", "翻译", "译成", "翻成",
+		"总结这段", "摘要一下", "说人话",
+		"记住", "别忘", "忘记", "我的档案", "提醒我", "定个时", "取消提醒",
+		"讲个笑", "笑话", "运势", "占卜",
+		"我住", "我家在", "我叫", "叫我", "最喜欢", "最爱", "我女朋友", "我男朋友",
+		"weather", "translate", "remind",
+	} {
+		if strings.Contains(low, strings.ToLower(k)) || strings.Contains(msg, k) {
+			return true
+		}
+	}
+	if isDeterministicMath(msg) {
+		return true
+	}
+	if len(matched) > 0 && matchedSoftSkillsOnly(matched) {
+		return true
+	}
+	for _, sk := range matched {
+		switch sk.Name {
+		case "weather-care", "scheduler", "lingua", "memory-keeper",
+			"owner-dossier", "self-growth", "documents":
+			return true
+		}
+	}
+	return false
+}
+
+func isDeterministicMath(msg string) bool {
+	s := strings.TrimSpace(msg)
+	if s == "" {
+		return false
+	}
+	// Allow digits, ops, spaces, 等于/是多少
+	compact := strings.NewReplacer("等于", "", "是多少", "", "多少", "", "？", "", "?", "", " ", "", "算", "").Replace(s)
+	if compact == "" {
+		return false
+	}
+	hasDigit := false
+	for _, r := range compact {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r == '+' || r == '-' || r == '*' || r == '/' || r == '×' || r == '÷' || r == '(' || r == ')' || r == '.' || r == '=':
+			continue
+		default:
+			return false
+		}
+	}
+	return hasDigit
 }
 
 func uniq(in []string) []string {
